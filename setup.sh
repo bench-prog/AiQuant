@@ -39,7 +39,6 @@ echo -e "${YELLOW}Creating project directories...${NC}"
 mkdir -p "$PROJECT_ROOT/freqtrade/user_data"/{strategies,models,data,notebooks,logs}
 mkdir -p "$PROJECT_ROOT/research"
 mkdir -p "$PROJECT_ROOT/deploy"
-# scripts directory removed; setup.sh lives at project root
 
 touch "$PROJECT_ROOT/freqtrade/user_data/strategies/__init__.py"
 

@@ -3,19 +3,15 @@
 Refresh the small-cap trading pair whitelist for the SmallCapMomentumStrategy.
 
 Workflow:
-    1. Fetch all coin tickers from CoinPaprika (market cap, volume, 7d change).
-    2. Filter for small-cap high-momentum candidates:
-       - market cap ≤ $500M
-       - 24h volume ≥ $10M
-       - turnover rate 100%–500%
-       - positive 7-day momentum
+    1. Fetch all coin tickers from CoinPaprika (supply, volume, 7d change).
+    2. Filter for small-cap high-momentum candidates (coarse filters).
     3. Map symbols to Binance USDT spot pairs.
     4. Save the filtered list to freqtrade/user_data/data/smallcap_universe.json.
     5. Update the pair_whitelist in the Freqtrade config file.
 
-Usage:
-    python update_smallcap_whitelist.py
-    python update_smallcap_whitelist.py --top-n 30 --max-cap 300000000
+NOTE: Real-time market cap and turnover rate are computed INSIDE the strategy
+using K-line close price × total_supply. This script only provides the supply
+snapshot and coarse whitelist.
 """
 
 import argparse
@@ -81,13 +77,14 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Persist fields needed by strategy at runtime
     records = universe[
         [
             "symbol",
             "binance_pair",
-            "market_cap",
+            "total_supply",
+            "market_cap",          # static reference only
             "volume_24h",
-            "turnover_rate",
             "percent_change_7d",
             "percent_change_24h",
             "first_data_at",

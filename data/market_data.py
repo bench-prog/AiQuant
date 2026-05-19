@@ -399,6 +399,7 @@ def fetch_coinpaprika_tickers(use_cache: bool = True) -> pd.DataFrame:
                 "first_data_at": item.get("first_data_at"),
                 "price": usd_quote.get("price"),
                 "volume_24h": usd_quote.get("volume_24h"),
+                "total_supply": item.get("total_supply"),
                 "market_cap": usd_quote.get("market_cap"),
                 "percent_change_7d": usd_quote.get("percent_change_7d"),
                 "percent_change_24h": usd_quote.get("percent_change_24h"),
@@ -408,7 +409,7 @@ def fetch_coinpaprika_tickers(use_cache: bool = True) -> pd.DataFrame:
     df = pd.DataFrame(records)
 
     # Ensure numeric columns are numeric
-    for col in ["price", "volume_24h", "market_cap", "percent_change_7d", "percent_change_24h"]:
+    for col in ["price", "volume_24h", "market_cap", "percent_change_7d", "percent_change_24h", "total_supply"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
     # Save to cache
@@ -466,40 +467,41 @@ def filter_smallcap_candidates(
     """
     Filter CoinPaprika tickers to small-cap high-momentum candidates traded on Binance.
 
+    NOTE: market_cap and turnover are calculated IN-STRATEGY using real-time K-line
+    prices and total_supply. This function only does coarse filtering to keep the
+    whitelist manageable.
+
     Steps:
         1. percent_change_7d > 0, sort descending.
-        2. Compute turnover_rate = volume_24h / market_cap * 100, filter range.
-        3. market_cap <= max_market_cap, volume_24h >= min_volume,
-           first_data_at >= min_age_days ago.
-        4. Map to Binance spot USDT pairs.
-        5. Return top_n.
+        2. Coarse market_cap <= max_market_cap * 2 (using CoinPaprika static value).
+        3. volume_24h >= min_volume, first_data_at >= min_age_days ago.
+        4. Must have total_supply > 0.
+        5. Map to Binance spot USDT pairs.
+        6. Return top_n.
     """
     df = df.copy()
 
     # Step 1: positive 7d momentum
     df = df[df["percent_change_7d"] > 0].sort_values("percent_change_7d", ascending=False)
 
-    # Step 2: turnover rate filter
-    df["turnover_rate"] = df["volume_24h"] / df["market_cap"] * 100
-    df = df[(df["turnover_rate"] >= min_turnover) & (df["turnover_rate"] <= max_turnover)]
-
-    # Step 3: market cap, volume, age filters
-    df = df[df["market_cap"] <= max_market_cap]
+    # Step 2-4: coarse filters (static data, strategy refines with live prices)
+    df = df[df["market_cap"] <= max_market_cap * 2]
     df = df[df["volume_24h"] >= min_volume]
+    df = df[df["total_supply"] > 0]
 
     cutoff_date = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=min_age_days)
     df["first_data_at_dt"] = pd.to_datetime(df["first_data_at"], errors="coerce", utc=True)
     df = df[df["first_data_at_dt"] <= cutoff_date]
     df = df.drop(columns=["first_data_at_dt"])
 
-    # Step 4: map to Binance
+    # Step 5: map to Binance
     df = map_to_binance_pairs(df)
 
-    # Step 5: top N
+    # Step 6: top N
     df = df.head(top_n).reset_index(drop=True)
     logger.info(
-        f"Smallcap universe: {len(df)} coins (cap≤{max_market_cap:,.0f}, "
-        f"vol≥{min_volume:,.0f}, turnover {min_turnover:.0f}-{max_turnover:.0f}%, age≥{min_age_days}d)"
+        f"Smallcap universe: {len(df)} coins (coarse cap≤{max_market_cap * 2:,.0f}, "
+        f"vol≥{min_volume:,.0f}, age≥{min_age_days}d)"
     )
     return df
 
