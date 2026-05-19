@@ -347,6 +347,163 @@ def fetch_open_interest(
     return df
 
 
+def fetch_coinpaprika_tickers(use_cache: bool = True) -> pd.DataFrame:
+    """
+    Fetch all tickers from CoinPaprika API.
+
+    Returns:
+        DataFrame with columns: id, name, symbol, rank, first_data_at,
+        price, volume_24h, market_cap, percent_change_7d, percent_change_24h
+    """
+    today_date = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d")
+    cache_file = CACHE_DIR / f"coinpaprika_tickers_{today_date}.parquet"
+
+    if use_cache and cache_file.exists():
+        logger.info(f"Loading cached CoinPaprika tickers from {cache_file}")
+        return pd.read_parquet(cache_file)
+
+    url = "https://api.coinpaprika.com/v1/tickers"
+    logger.info(f"Fetching CoinPaprika tickers from {url}...")
+
+    try:
+        try:
+            import requests
+
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
+        except ImportError:
+            import json
+            import urllib.request
+
+            with urllib.request.urlopen(url, timeout=30) as response:
+                data = json.loads(response.read().decode("utf-8"))
+    except Exception as e:
+        logger.warning(f"Failed to fetch CoinPaprika tickers: {e}")
+        return pd.DataFrame()
+
+    if not isinstance(data, list):
+        logger.warning(f"Unexpected CoinPaprika response format: {type(data)}")
+        return pd.DataFrame()
+
+    records = []
+    for item in data:
+        quotes = item.get("quotes", {})
+        usd_quote = quotes.get("USD", {})
+        records.append(
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "symbol": str(item.get("symbol", "")).upper(),
+                "rank": item.get("rank"),
+                "first_data_at": item.get("first_data_at"),
+                "price": usd_quote.get("price"),
+                "volume_24h": usd_quote.get("volume_24h"),
+                "market_cap": usd_quote.get("market_cap"),
+                "percent_change_7d": usd_quote.get("percent_change_7d"),
+                "percent_change_24h": usd_quote.get("percent_change_24h"),
+            }
+        )
+
+    df = pd.DataFrame(records)
+
+    # Ensure numeric columns are numeric
+    for col in ["price", "volume_24h", "market_cap", "percent_change_7d", "percent_change_24h"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Save to cache
+    df.to_parquet(cache_file)
+    logger.info(f"CoinPaprika tickers cached to {cache_file} ({len(df)} rows)")
+    return df
+
+
+def map_to_binance_pairs(df: pd.DataFrame, exchange_name: str = "binance") -> pd.DataFrame:
+    """
+    Map CoinPaprika symbols to Binance spot USDT pairs.
+
+    Args:
+        df: DataFrame with a 'symbol' column (uppercase coin ticker).
+        exchange_name: ccxt exchange id.
+
+    Returns:
+        DataFrame with an added 'binance_pair' column, filtered to mappable rows.
+    """
+    logger.info(f"Loading markets from {exchange_name}...")
+    try:
+        exchange_class = getattr(ccxt, exchange_name)
+        exchange = exchange_class({"enableRateLimit": True})
+        markets = exchange.load_markets()
+    except Exception as e:
+        logger.warning(f"Failed to load markets from {exchange_name}: {e}")
+        return df.iloc[0:0].copy()  # empty df with same columns
+
+    mapping = {}
+    for pair_symbol, market in markets.items():
+        is_spot = market.get("spot", False) or market.get("type") == "spot"
+        quote = market.get("quote", "")
+        base = market.get("base", "")
+        if is_spot and quote == "USDT" and base:
+            mapping[base.lower()] = pair_symbol
+
+    df = df.copy()
+    df["binance_pair"] = df["symbol"].str.lower().map(mapping)
+    before = len(df)
+    df = df.dropna(subset=["binance_pair"]).reset_index(drop=True)
+    after = len(df)
+    logger.info(f"Mapped {after}/{before} symbols to {exchange_name} USDT spot pairs.")
+    return df
+
+
+def filter_smallcap_universe(
+    df: pd.DataFrame,
+    max_market_cap: float = 500_000_000,
+    min_volume: float = 10_000_000,
+    min_turnover: float = 100.0,
+    max_turnover: float = 500.0,
+    min_age_days: int = 30,
+    top_n: int = 20,
+) -> pd.DataFrame:
+    """
+    Filter CoinPaprika tickers to a small-cap high-momentum universe traded on Binance.
+
+    Steps:
+        1. percent_change_7d > 0, sort descending.
+        2. Compute turnover_rate = volume_24h / market_cap * 100, filter range.
+        3. market_cap <= max_market_cap, volume_24h >= min_volume,
+           first_data_at >= min_age_days ago.
+        4. Map to Binance spot USDT pairs.
+        5. Return top_n.
+    """
+    df = df.copy()
+
+    # Step 1: positive 7d momentum
+    df = df[df["percent_change_7d"] > 0].sort_values("percent_change_7d", ascending=False)
+
+    # Step 2: turnover rate filter
+    df["turnover_rate"] = df["volume_24h"] / df["market_cap"] * 100
+    df = df[(df["turnover_rate"] >= min_turnover) & (df["turnover_rate"] <= max_turnover)]
+
+    # Step 3: market cap, volume, age filters
+    df = df[df["market_cap"] <= max_market_cap]
+    df = df[df["volume_24h"] >= min_volume]
+
+    cutoff_date = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=min_age_days)
+    df["first_data_at_dt"] = pd.to_datetime(df["first_data_at"], errors="coerce", utc=True)
+    df = df[df["first_data_at_dt"] <= cutoff_date]
+    df = df.drop(columns=["first_data_at_dt"])
+
+    # Step 4: map to Binance
+    df = map_to_binance_pairs(df)
+
+    # Step 5: top N
+    df = df.head(top_n).reset_index(drop=True)
+    logger.info(
+        f"Smallcap universe: {len(df)} coins (cap≤{max_market_cap:,.0f}, "
+        f"vol≥{min_volume:,.0f}, turnover {min_turnover:.0f}-{max_turnover:.0f}%, age≥{min_age_days}d)"
+    )
+    return df
+
+
 if __name__ == "__main__":
     # Quick test
     df = fetch_ohlcv_ccxt("BTC/USDT", "1h", "2024-01-01", "2024-02-01")
