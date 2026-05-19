@@ -1,6 +1,10 @@
 """
 Train a scikit-learn / LightGBM model for crypto direction prediction.
 
+Uses a strict temporal train/test split to avoid look-ahead bias:
+  Training: 2022-01-01 ~ 2023-12-31
+  Test (for Freqtrade backtest): 2024-01-01 ~ 2024-12-31
+
 Output:
   ../freqtrade/user_data/models/sklearn_model.pkl
   ../freqtrade/user_data/models/feature_config.json
@@ -13,16 +17,21 @@ Usage:
 
 import json
 import logging
+import sys
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
 from data_fetcher import fetch_ohlcv_ccxt
-from features import build_all_features, get_feature_columns
 from lightgbm import LGBMClassifier
-from sklearn.metrics import accuracy_score, classification_report, roc_auc_score
+from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
+
+# Import shared feature engineering from strategies directory
+_strategies_dir = Path(__file__).parent.parent / "freqtrade" / "user_data" / "strategies"
+sys.path.insert(0, str(_strategies_dir))
+from feature_engineering import build_all_features, get_feature_columns  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,14 +42,13 @@ logger = logging.getLogger(__name__)
 MODEL_OUTPUT_DIR = Path(__file__).parent.parent / "freqtrade" / "user_data" / "models"
 MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Crypto settings
 SYMBOL = "BTC/USDT"
 TIMEFRAME = "1h"
-START_DATE = "2022-01-01"
-END_DATE = "2024-12-31"
+TRAIN_START = "2022-01-01"
+TRAIN_END = "2023-12-31"      # Hard cutoff: model never sees 2024 data
+FULL_END = "2024-12-31"       # Used only to cache data for convenience
 EXCHANGE = "binance"
 
-# Target: predict if next period close is higher than current close
 HORIZON = 1
 
 
@@ -49,8 +57,8 @@ def load_data() -> pd.DataFrame:
     df = fetch_ohlcv_ccxt(
         symbol=SYMBOL,
         timeframe=TIMEFRAME,
-        start_date=START_DATE,
-        end_date=END_DATE,
+        start_date=TRAIN_START,
+        end_date=FULL_END,
         exchange_name=EXCHANGE,
         use_cache=True,
     )
@@ -67,25 +75,32 @@ def prepare_target(df: pd.DataFrame, horizon: int = HORIZON) -> pd.DataFrame:
 
 
 def train_model(df: pd.DataFrame):
-    """Train LightGBM with time-series cross-validation."""
+    """Train LightGBM with time-series cross-validation on TRAIN period only."""
     df = build_all_features(df)
     df = prepare_target(df)
 
     feature_cols = get_feature_columns(df)
-    # Remove non-feature columns that might have been added
-    feature_cols = [c for c in feature_cols if c not in {"target"}]
+    feature_cols = [c for c in feature_cols if c != "target"]
 
-    # Drop rows with NaN in features or target
-    valid = df[feature_cols + ["target"]].notnull().all(axis=1)
-    df = df.loc[valid].copy()
+    # STRICT TEMPORAL SPLIT: only use data up to TRAIN_END for training
+    train_mask = df["date"] < pd.Timestamp(TRAIN_END, tz="UTC")
+    df_train = df.loc[train_mask].copy()
 
-    X = df[feature_cols]
-    y = df["target"]
+    valid = df_train[feature_cols + ["target"]].notnull().all(axis=1)
+    df_train = df_train.loc[valid].copy()
 
+    if len(df_train) == 0:
+        logger.error("No valid training samples after dropping NaNs. Check feature engineering.")
+        raise ValueError("Dataset is empty after NaN drop. Inspect feature columns for all-NaN values.")
+
+    X = df_train[feature_cols]
+    y = df_train["target"]
+
+    logger.info(f"Training period: {df_train['date'].min()} ~ {df_train['date'].max()}")
     logger.info(f"Features used ({len(feature_cols)}): {feature_cols[:5]}...")
     logger.info(f"Training samples: {len(X)}, Positive ratio: {y.mean():.2%}")
 
-    # Time-series split (respect temporal order!)
+    # Time-series CV (respect temporal order!)
     tscv = TimeSeriesSplit(n_splits=5)
     auc_scores = []
 
@@ -94,19 +109,20 @@ def train_model(df: pd.DataFrame):
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
         model = LGBMClassifier(
-            n_estimators=200,
-            learning_rate=0.05,
-            max_depth=6,
-            subsample=0.8,
-            colsample_bytree=0.8,
+            n_estimators=500,
+            learning_rate=0.03,
+            max_depth=-1,
+            num_leaves=31,
+            min_child_samples=5,
+            reg_alpha=0.0,
+            reg_lambda=0.0,
+            subsample=0.9,
+            colsample_bytree=0.9,
             random_state=42,
             n_jobs=-1,
+            verbose=-1,
         )
-        model.fit(
-            X_train, y_train,
-            eval_set=[(X_val, y_val)],
-            callbacks=[],
-        )
+        model.fit(X_train, y_train)
 
         val_pred = model.predict_proba(X_val)[:, 1]
         auc = roc_auc_score(y_val, val_pred)
@@ -115,40 +131,58 @@ def train_model(df: pd.DataFrame):
 
     logger.info(f"Mean CV AUC: {np.mean(auc_scores):.4f} (+/- {np.std(auc_scores):.4f})")
 
-    # Final model: train on all data (for deployment)
+    # Final model: train on entire TRAIN period
     final_model = LGBMClassifier(
-        n_estimators=200,
-        learning_rate=0.05,
-        max_depth=6,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        n_estimators=500,
+        learning_rate=0.03,
+        max_depth=-1,
+        num_leaves=31,
+        min_child_samples=5,
+        reg_alpha=0.0,
+        reg_lambda=0.0,
+        subsample=0.9,
+        colsample_bytree=0.9,
         random_state=42,
         n_jobs=-1,
+        verbose=-1,
     )
     final_model.fit(X, y)
+
+    # Evaluate on held-out TEST period (2024) — for sanity check only
+    test_mask = df["date"] >= pd.Timestamp(TRAIN_END, tz="UTC")
+    df_test = df.loc[test_mask].copy()
+    test_valid = df_test[feature_cols + ["target"]].notnull().all(axis=1)
+    df_test = df_test.loc[test_valid]
+
+    if len(df_test) > 0:
+        X_test = df_test[feature_cols]
+        y_test = df_test["target"]
+        test_pred = final_model.predict_proba(X_test)[:, 1]
+        test_auc = roc_auc_score(y_test, test_pred)
+        logger.info(f"=== Held-out TEST AUC (2024): {test_auc:.4f} ===")
+    else:
+        logger.warning("No test data available for evaluation.")
 
     # Save model
     model_path = MODEL_OUTPUT_DIR / "sklearn_model.pkl"
     joblib.dump(final_model, model_path)
     logger.info(f"Model saved to {model_path}")
 
-    # Save feature config (so the strategy knows which columns to use)
+    # Save feature config
     config = {
         "model_type": "lightgbm",
         "feature_columns": feature_cols,
         "symbol": SYMBOL,
         "timeframe": TIMEFRAME,
         "horizon": HORIZON,
+        "train_range": [TRAIN_START, TRAIN_END],
         "cv_auc_mean": float(np.mean(auc_scores)),
+        "test_auc_2024": float(test_auc) if len(df_test) > 0 else None,
     }
     config_path = MODEL_OUTPUT_DIR / "feature_config.json"
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
     logger.info(f"Feature config saved to {config_path}")
-
-    # Quick sanity check on latest data
-    latest_pred = final_model.predict_proba(X.tail(100))[:, 1]
-    logger.info(f"Latest 100 predictions mean: {latest_pred.mean():.4f}")
 
     return final_model
 

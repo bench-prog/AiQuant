@@ -21,16 +21,32 @@ from typing import Optional
 import joblib
 import numpy as np
 import pandas as pd
-import pandas_ta as pta
-from freqtrade.strategy import IStrategy, merge_informative_pair
+from freqtrade.strategy import IStrategy
+
+# Shared feature engineering (same code used in training)
+from feature_engineering import build_all_features
 
 # Optional PyTorch import with graceful fallback
 try:
     import torch
     import torch.nn as nn
     TORCH_AVAILABLE = True
+
+    class SimpleLSTM(nn.Module):
+        def __init__(self, input_size: int = 10, hidden_size: int = 32, num_layers: int = 2):
+            super().__init__()
+            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
+            self.fc = nn.Linear(hidden_size, 1)
+            self.sigmoid = nn.Sigmoid()
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            out, _ = self.lstm(x)
+            out = self.fc(out[:, -1, :])
+            return self.sigmoid(out)
+
 except ImportError:
     TORCH_AVAILABLE = False
+    SimpleLSTM = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -45,21 +61,6 @@ FEATURE_CONFIG_PATH = MODEL_DIR / "feature_config.json"
 # Signal thresholds
 ENTRY_THRESHOLD = 0.6   # Model probability > 0.6 -> enter long
 EXIT_THRESHOLD = 0.4    # Model probability < 0.4 -> exit long
-
-# ---------------------------------------------------------------------------
-# Simple LSTM stub (used if a PyTorch model file is provided)
-# ---------------------------------------------------------------------------
-class SimpleLSTM(nn.Module):
-    def __init__(self, input_size: int = 10, hidden_size: int = 32, num_layers: int = 2):
-        super().__init__()
-        self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, 1)
-        self.sigmoid = nn.Sigmoid()
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out, _ = self.lstm(x)
-        out = self.fc(out[:, -1, :])
-        return self.sigmoid(out)
 
 
 # ---------------------------------------------------------------------------
@@ -134,31 +135,11 @@ class AIModelStrategy(IStrategy):
     # ------------------------------------------------------------------
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         """
-        Calculate technical indicators used as model features.
-        Customize this list to match the features used during training.
+        Build all features and run model inference.
+        Uses the same feature_engineering module as training to ensure consistency.
         """
-        # Trend
-        dataframe["ema_12"] = pta.ema(dataframe["close"], length=12)
-        dataframe["ema_26"] = pta.ema(dataframe["close"], length=26)
-        dataframe["macd"] = pta.macd(dataframe["close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
-        dataframe["macd_signal"] = pta.macd(dataframe["close"], fast=12, slow=26, signal=9)["MACDs_12_26_9"]
-
-        # Momentum
-        dataframe["rsi"] = pta.rsi(dataframe["close"], length=14)
-        dataframe["rsi_6"] = pta.rsi(dataframe["close"], length=6)
-
-        # Volatility
-        dataframe["atr"] = pta.atr(dataframe["high"], dataframe["low"], dataframe["close"], length=14)
-        dataframe["bbands_upper"] = pta.bbands(dataframe["close"], length=20, std=2)["BBU_20_2.0"]
-        dataframe["bbands_lower"] = pta.bbands(dataframe["close"], length=20, std=2)["BBL_20_2.0"]
-
-        # Volume
-        dataframe["volume_sma"] = dataframe["volume"].rolling(window=20).mean()
-        dataframe["volume_ratio"] = dataframe["volume"] / dataframe["volume_sma"]
-
-        # Price relative to moving averages
-        dataframe["close_above_ema12"] = (dataframe["close"] > dataframe["ema_12"]).astype(int)
-        dataframe["close_above_ema26"] = (dataframe["close"] > dataframe["ema_26"]).astype(int)
+        # Build all features (identical to training pipeline)
+        dataframe = build_all_features(dataframe)
 
         # --- Model inference ------------------------------------------------
         if self.model_type == "sklearn" and self.sklearn_model is not None:
@@ -166,19 +147,18 @@ class AIModelStrategy(IStrategy):
         elif self.model_type == "pytorch" and self.pytorch_model is not None:
             dataframe = self._predict_pytorch(dataframe)
         else:
-            # Fallback: use RSI for demo
+            # Fallback: neutral prediction
             dataframe["ai_prediction"] = 0.5
 
         return dataframe
 
     def _predict_sklearn(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Run sklearn model inference on the dataframe."""
-        # Define feature columns (must match training!)
-        feature_cols = [
-            "rsi", "rsi_6", "macd", "macd_signal",
-            "atr", "volume_ratio",
-            "close_above_ema12", "close_above_ema26"
-        ]
+        # Use exact feature list from training config
+        feature_cols = self.feature_config.get("feature_columns", []) if self.feature_config else []
+        if not feature_cols:
+            logger.warning("[AiQuant] No feature_columns in config. Using all non-OHLCV columns.")
+            feature_cols = [c for c in dataframe.columns if c not in {"open", "high", "low", "close", "volume", "date"}]
 
         # Drop rows with NaN features
         valid_idx = dataframe[feature_cols].notnull().all(axis=1)
@@ -200,11 +180,9 @@ class AIModelStrategy(IStrategy):
 
     def _predict_pytorch(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Run PyTorch model inference on the dataframe."""
-        feature_cols = [
-            "rsi", "rsi_6", "macd", "macd_signal",
-            "atr", "volume_ratio",
-            "close_above_ema12", "close_above_ema26"
-        ]
+        feature_cols = self.feature_config.get("feature_columns", []) if self.feature_config else []
+        if not feature_cols:
+            feature_cols = [c for c in dataframe.columns if c not in {"open", "high", "low", "close", "volume", "date"}]
 
         valid_idx = dataframe[feature_cols].notnull().all(axis=1)
         df_valid = dataframe.loc[valid_idx].copy()
@@ -213,8 +191,7 @@ class AIModelStrategy(IStrategy):
             dataframe["ai_prediction"] = 0.5
             return dataframe
 
-        # Create sliding window sequences (example: lookback=20)
-        lookback = 20
+        lookback = self.feature_config.get("lookback", 20) if self.feature_config else 20
         predictions = []
 
         for i in range(len(df_valid)):
@@ -242,7 +219,7 @@ class AIModelStrategy(IStrategy):
 
         # Optional: add confirmation filters
         # e.g., only enter if RSI is not extremely overbought
-        not_overbought = dataframe["rsi"] < 75
+        not_overbought = dataframe["rsi_14"] < 75
 
         dataframe.loc[ai_long & not_overbought, "enter_long"] = 1
         return dataframe
@@ -255,7 +232,7 @@ class AIModelStrategy(IStrategy):
 
         # Optional: add confirmation filters
         # e.g., exit if RSI is extremely overbought
-        overbought = dataframe["rsi"] > 80
+        overbought = dataframe["rsi_14"] > 80
 
         dataframe.loc[ai_exit | overbought, "exit_long"] = 1
         return dataframe

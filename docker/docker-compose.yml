@@ -1,6 +1,8 @@
 services:
   freqtrade:
-    image: freqtradeorg/freqtrade:stable
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: aiquant-freqtrade
     volumes:
       # Mount local user_data to container's freqtrade user_data
