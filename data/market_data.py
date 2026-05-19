@@ -5,7 +5,7 @@ Fetches OHLCV historical data from Binance (or any ccxt-supported exchange)
 with automatic pagination, rate-limit handling, and local caching.
 
 Usage:
-    from data_fetcher import fetch_ohlcv_ccxt
+    from market_data import fetch_ohlcv_ccxt
     df = fetch_ohlcv_ccxt("BTC/USDT", "1h", "2022-01-01", "2024-12-31")
 """
 
@@ -454,7 +454,7 @@ def map_to_binance_pairs(df: pd.DataFrame, exchange_name: str = "binance") -> pd
     return df
 
 
-def filter_smallcap_universe(
+def filter_smallcap_candidates(
     df: pd.DataFrame,
     max_market_cap: float = 500_000_000,
     min_volume: float = 10_000_000,
@@ -464,7 +464,7 @@ def filter_smallcap_universe(
     top_n: int = 20,
 ) -> pd.DataFrame:
     """
-    Filter CoinPaprika tickers to a small-cap high-momentum universe traded on Binance.
+    Filter CoinPaprika tickers to small-cap high-momentum candidates traded on Binance.
 
     Steps:
         1. percent_change_7d > 0, sort descending.

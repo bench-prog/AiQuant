@@ -20,7 +20,7 @@ AiQuant is a **personal AI-powered cryptocurrency quantitative trading system** 
 | AI/ML | scikit-learn, LightGBM, PyTorch, pandas, numpy |
 | Feature Engineering | **Pure pandas/numpy** (no external TA libraries) |
 | Data Fetching | ccxt (Binance public OHLCV) |
-| Feature Storage | Parquet in `ai_engine/cache/` |
+| Feature Storage | Parquet in `data/cache/` |
 | Monitoring | Freqtrade Web UI (port 8080), Telegram Bot |
 | Environment | Docker + Docker Compose |
 
@@ -32,30 +32,33 @@ AiQuant is a **personal AI-powered cryptocurrency quantitative trading system** 
 AiQuant/
 ├── CLAUDE.md                           # This file
 ├── README.md                           # Human-readable quick start
-├── docker/
+├── setup.sh                            # Environment initialization script
+├── data/                               # Data ingestion layer
+│   ├── market_data.py                  # CCXT-based OHLCV / funding rate / OI downloader with caching
+│   └── cache/                          # Parquet cache for downloaded market data
+├── deploy/                             # Deployment configuration
 │   ├── Dockerfile                      # Custom Freqtrade image (+LightGBM, +sklearn)
 │   └── docker-compose.yml              # Freqtrade Docker service definition
-├── scripts/
-│   └── setup.sh                        # One-click setup script
-├── freqtrade/
-│   ├── config.json                     # Main Freqtrade configuration (API keys, pairs, risk)
+├── freqtrade/                          # Freqtrade runtime
+│   ├── config_ai_model.json            # AI model strategy configuration (API keys, pairs, risk)
+│   ├── config_smallcap.json            # Small-cap momentum strategy configuration
 │   └── user_data/
 │       ├── strategies/
 │       │   ├── __init__.py
-│       │   ├── feature_engineering.py  # **Shared indicators + feature pipelines**
-│       │   ├── drift_utils.py          # **Drift detection (PSI) + Telegram sender**
-│       │   └── AIModelStrategy.py      # Strategy with AI model loading + online drift monitor
+│       │   ├── features.py             # **Shared indicators + feature pipelines**
+│       │   ├── strategy_ai_model.py    # AI model strategy (self-contained, with drift monitor)
+│       │   └── strategy_smallcap.py    # Small-cap momentum strategy (self-contained, with filters)
 │       ├── models/                     # Trained AI models (.pkl, .pt) + feature_config.json + drift_baseline.json
 │       ├── data/                       # Historical price data downloaded by Freqtrade
 │       ├── notebooks/                  # Jupyter notebooks for research
 │       └── logs/                       # Strategy logs + drift_alerts.jsonl
-├── ai_engine/                          # Local AI model training scripts
+├── research/                           # AI model training scripts
 │   ├── requirements.txt
-│   ├── data_fetcher.py                 # CCXT-based OHLCV / funding rate / open interest downloader with caching
-│   ├── features.py                     # Re-exports from feature_engineering.py
-│   ├── drift_telegram.py               # Standalone CLI for drift Telegram alerts
-│   ├── train_sklearn.py                # LightGBM with strict temporal split + drift baseline export
-│   └── train_pytorch.py              # LSTM with strict temporal split
+│   ├── alert_cli.py                    # Standalone CLI for drift alerts
+│   ├── train_classifier.py             # LightGBM with strict temporal split + drift baseline export
+│   └── train_sequence.py               # LSTM with temporal split
+├── tools/                              # Operational tools
+│   └── update_smallcap_whitelist.py    # Refresh small-cap trading pair whitelist
 └── .gitignore
 ```
 
@@ -66,8 +69,8 @@ AiQuant/
 ### 1. One-Click Setup
 
 ```bash
-chmod +x scripts/setup.sh
-./scripts/setup.sh
+chmod +x setup.sh
+./setup.sh
 ```
 
 This will:
@@ -78,10 +81,10 @@ This will:
 ### 2. Build Custom Docker Image
 
 ```bash
-docker compose -f docker/docker-compose.yml build
+docker compose -f deploy/docker-compose.yml build
 ```
 
-The custom `docker/Dockerfile` installs `lightgbm`, `scikit-learn`, `joblib`, and `numpy` on top of the official Freqtrade image. **No pandas-ta is required** — all indicators are implemented with pure pandas/numpy in `feature_engineering.py`.
+The custom `deploy/Dockerfile` installs `lightgbm`, `scikit-learn`, `joblib`, and `numpy` on top of the official Freqtrade image. **No pandas-ta is required** — all indicators are implemented with pure pandas/numpy in `features.py`.
 
 ### 3. Train AI Model (No API Key Needed)
 
@@ -92,17 +95,17 @@ Training scripts download historical crypto data via **ccxt** from Binance. No e
 - **Test period:** 2024-01-01 ~ 2024-12-31 (held out for evaluation only)
 
 ```bash
-cd ai_engine
+cd research
 pip install -r requirements.txt
-python train_sklearn.py        # Downloads BTC/USDT 1h, trains LightGBM
-python train_pytorch.py        # Or train an LSTM
+python train_classifier.py        # Downloads BTC/USDT 1h, trains LightGBM
+python train_sequence.py        # Or train an LSTM
 ```
 
-Data is automatically cached to `ai_engine/cache/` as Parquet files to avoid re-downloading.
+Data is automatically cached to `data/cache/` as Parquet files to avoid re-downloading.
 
 ### 4. Configure Exchange API Keys (for Trading Only)
 
-Edit `freqtrade/config.json`:
+Edit `freqtrade/config_ai_model.json`:
 
 ```json
 "exchange": {
@@ -124,21 +127,21 @@ Edit `freqtrade/config.json`:
 Freqtrade uses its own data format separate from the training cache.
 
 ```bash
-docker compose -f docker/docker-compose.yml run --rm freqtrade \
+docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     download-data --pairs BTC/USDT ETH/USDT --timeframe 1h --timerange 20240101-20241231
 ```
 
 ### 6. Run Backtest
 
 ```bash
-docker compose -f docker/docker-compose.yml run --rm freqtrade \
+docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     backtesting --strategy AIModelStrategy --timerange 20240101-20241231
 ```
 
 ### 7. Start Paper Trading (Dry Run)
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
 Access the Web UI at `http://localhost:8080`.
@@ -146,18 +149,18 @@ Access the Web UI at `http://localhost:8080`.
 ### 8. Stop
 
 ```bash
-docker compose -f docker/docker-compose.yml down
+docker compose -f deploy/docker-compose.yml down
 ```
 
 ---
 
 ## How AI Model Integration Works
 
-The strategy `AIModelStrategy.py` demonstrates the integration pattern:
+The strategy `strategy_ai_model.py` demonstrates the integration pattern:
 
 1. **Model Loading:** In `bot_start()`, load the model and `feature_config.json` from `/freqtrade/user_data/models/`
-2. **Feature Building:** In `populate_indicators()`, call `build_all_features()` from the shared `feature_engineering.py` module — **identical to the training pipeline**
-3. **Inference:** In `_predict_sklearn()` / `_predict_pytorch()`, use the exact feature column list stored in `feature_config.json` to ensure training/backtest consistency
+2. **Feature Building:** In `populate_indicators()`, call `build_all_features()` from the shared `features.py` module — **identical to the training pipeline**
+3. **Inference:** In `_predict_classifier()` / `_predict_sequence_model()`, use the exact feature column list stored in `feature_config.json` to ensure training/backtest consistency
 4. **Signal Mapping:** In `populate_entry_trend()` / `populate_exit_trend()`, convert model probability to `enter_long` / `exit_long`
 
 ### Model File Naming Convention
@@ -172,16 +175,17 @@ The strategy `AIModelStrategy.py` demonstrates the integration pattern:
 
 | File | Purpose | When to Modify |
 |------|---------|----------------|
-| `freqtrade/config.json` | Exchange keys, trading pairs, timeframe, risk limits | Always edit before first run |
-| `freqtrade/user_data/strategies/feature_engineering.py` | **Shared pure-pandas indicators and feature pipelines** | When adding new features — affects both training and backtest |
-| `freqtrade/user_data/strategies/AIModelStrategy.py` | Core strategy + AI inference + online drift monitor | Modify signal thresholds or add filters |
-| `freqtrade/user_data/strategies/drift_utils.py` | PSI computation, Telegram alert sender, JSONL logger | When tuning drift thresholds or alert format |
-| `ai_engine/train_sklearn.py` | Train LightGBM + export drift baseline | When tuning hyperparameters or target horizon |
-| `ai_engine/train_pytorch.py` | Train LSTM with temporal split | For neural network experiments |
-| `ai_engine/data_fetcher.py` | CCXT OHLCV / funding rate / OI downloader with caching | When switching exchanges or timeframes |
-| `ai_engine/drift_telegram.py` | Standalone CLI to send/test drift Telegram alerts | Rarely needed |
-| `docker/Dockerfile` | Custom image with ML dependencies | When adding new Python packages |
-| `docker/docker-compose.yml` | Container orchestration | Rarely needed |
+| `freqtrade/config_ai_model.json` | Exchange keys, trading pairs, timeframe, risk limits | Always edit before first run |
+| `freqtrade/user_data/strategies/features.py` | **Shared pure-pandas indicators and feature pipelines** | When adding new features — affects both training and backtest |
+| `freqtrade/user_data/strategies/strategy_ai_model.py` | Core strategy + AI inference + inline drift monitor + Telegram alerts | Modify signal thresholds or add filters |
+| `freqtrade/user_data/strategies/strategy_smallcap.py` | Small-cap momentum strategy with inline EMA/RSI filters | When tuning universe criteria or technical filters |
+| `data/market_data.py` | CCXT OHLCV / funding rate / OI downloader with caching | When switching exchanges or timeframes |
+| `research/train_classifier.py` | Train LightGBM + export drift baseline | When tuning hyperparameters or target horizon |
+| `research/train_sequence.py` | Train LSTM with temporal split | For neural network experiments |
+| `research/alert_cli.py` | Standalone CLI to send/test drift Telegram alerts | Rarely needed |
+| `tools/update_smallcap_whitelist.py` | Refresh small-cap pair whitelist from CoinPaprika | When updating universe criteria or exchange mappings |
+| `deploy/Dockerfile` | Custom image with ML dependencies | When adding new Python packages |
+| `deploy/docker-compose.yml` | Container orchestration | Rarely needed |
 
 ---
 
@@ -189,28 +193,28 @@ The strategy `AIModelStrategy.py` demonstrates the integration pattern:
 
 ```bash
 # Download historical data
- docker compose -f docker/docker-compose.yml run --rm freqtrade \
+ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     download-data --pairs BTC/USDT ETH/USDT --timeframe 1h --timerange 20230101-20241231
 
 # Hyperparameter optimization
- docker compose -f docker/docker-compose.yml run --rm freqtrade \
+ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     hyperopt --strategy AIModelStrategy --spaces buy roi stoploss
 
 # List available strategies
- docker compose -f docker/docker-compose.yml run --rm freqtrade list-strategies
+ docker compose -f deploy/docker-compose.yml run --rm freqtrade list-strategies
 
 # View logs
- docker compose -f docker/docker-compose.yml logs -f freqtrade
+ docker compose -f deploy/docker-compose.yml logs -f freqtrade
 
 # Enter container shell
- docker compose -f docker/docker-compose.yml exec freqtrade /bin/bash
+ docker compose -f deploy/docker-compose.yml exec freqtrade /bin/bash
 ```
 
 ---
 
 ## Important Constraints & Notes
 
-1. **Never commit API keys.** `config.json` contains secrets. It is listed in `.gitignore`.
+1. **Never commit API keys.** `config_ai_model.json` contains secrets. It is listed in `.gitignore`.
 2. **Dry Run First.** Freqtrade defaults to `dry_run: true`. Verify profitability in backtest + paper trade before live trading.
 3. **Temporal Split Discipline:** Training scripts hard-code `TRAIN_END = "2023-12-31"`. Do not expand the training window to include the backtest period, or you will invalidate the results.
 4. **AI Model Lifecycle:** Models go stale quickly in crypto. Plan for weekly/bi-weekly retraining.
@@ -227,8 +231,8 @@ The strategy `AIModelStrategy.py` demonstrates the integration pattern:
 
 ## Completed
 
-- [x] **Add funding rate and open interest features** — `data_fetcher.py` + `feature_engineering.py`, 9 new features, graceful fallback when data unavailable
-- [x] **Telegram bot alerts for model drift detection** — Online PSI monitor in `AIModelStrategy.py`, `drift_utils.py`, `drift_telegram.py` CLI, drift baseline exported during training
+- [x] **Add funding rate and open interest features** — `market_data.py` + `features.py`, 9 new features, graceful fallback when data unavailable
+- [x] **Telegram bot alerts for model drift detection** — Online drift monitor (stability index) in `strategy_ai_model.py`, `alert_cli.py` CLI, drift baseline exported during training
 
 ## Roadmap Ideas
 

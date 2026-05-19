@@ -2,13 +2,13 @@ services:
   freqtrade:
     build:
       context: ..
-      dockerfile: docker/Dockerfile
+      dockerfile: deploy/Dockerfile
     container_name: aiquant-freqtrade
     volumes:
       # Mount local user_data to container's freqtrade user_data
       - ../freqtrade/user_data:/freqtrade/user_data
       # Mount config as read-only for safety
-      - ../freqtrade/config.json:/freqtrade/config.json:ro
+      - ../freqtrade/config_ai_model.json:/freqtrade/config.json:ro
     # Freqtrade standard port for REST API / Web UI
     ports:
       - "8080:8080"
@@ -16,7 +16,6 @@ services:
     # Override this via docker compose run for backtesting/hyperopt
     command: >
       trade
-      --config /freqtrade/config.json
       --strategy AIModelStrategy
     restart: unless-stopped
     environment:

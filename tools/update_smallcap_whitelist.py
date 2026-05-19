@@ -1,5 +1,22 @@
 #!/usr/bin/env python3
-"""Update smallcap universe JSON for SmallCapMomentumStrategy."""
+"""
+Refresh the small-cap trading pair whitelist for the SmallCapMomentumStrategy.
+
+Workflow:
+    1. Fetch all coin tickers from CoinPaprika (market cap, volume, 7d change).
+    2. Filter for small-cap high-momentum candidates:
+       - market cap ≤ $500M
+       - 24h volume ≥ $10M
+       - turnover rate 100%–500%
+       - positive 7-day momentum
+    3. Map symbols to Binance USDT spot pairs.
+    4. Save the filtered list to freqtrade/user_data/data/smallcap_universe.json.
+    5. Update the pair_whitelist in the Freqtrade config file.
+
+Usage:
+    python update_smallcap_whitelist.py
+    python update_smallcap_whitelist.py --top-n 30 --max-cap 300000000
+"""
 
 import argparse
 import json
@@ -8,8 +25,8 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "ai_engine"))
-from data_fetcher import fetch_coinpaprika_tickers, filter_smallcap_universe
+sys.path.insert(0, str(Path(__file__).parent.parent / "data"))
+from data.market_data import fetch_coinpaprika_tickers, filter_smallcap_candidates
 
 
 def update_config_pair_whitelist(config_path: Path, pairs: list[str]) -> None:
@@ -52,7 +69,7 @@ def main():
         print("Failed to fetch CoinPaprika data.")
         sys.exit(1)
 
-    universe = filter_smallcap_universe(
+    universe = filter_smallcap_candidates(
         df,
         max_market_cap=args.max_cap,
         min_volume=args.min_volume,

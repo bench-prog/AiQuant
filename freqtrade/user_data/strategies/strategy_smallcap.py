@@ -17,7 +17,50 @@ import numpy as np
 import pandas as pd
 from freqtrade.strategy import IStrategy
 
-from momentum_filters import apply_all_filters
+from features import ema, rsi
+
+def add_trend_filter(df: pd.DataFrame, length: int = 30) -> pd.DataFrame:
+    """Add EMA trend filter."""
+    df = df.copy()
+    df["ema_30"] = ema(df["close"], length)
+    df["above_ema30"] = (df["close"] > df["ema_30"]).astype(int)
+    return df
+
+
+def add_momentum_filter(df: pd.DataFrame, length: int = 14) -> pd.DataFrame:
+    """Add RSI filter."""
+    df = df.copy()
+    df["rsi_14"] = rsi(df["close"], length)
+    return df
+
+
+def add_consecutive_down_days(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate consecutive down days (close < previous close).
+    Returns the number of consecutive down candles ending at the current candle.
+    """
+    df = df.copy()
+    down = (df["close"] < df["close"].shift(1)).astype(int)
+    arr = down.to_numpy(dtype=int)
+    result = np.zeros_like(arr, dtype=int)
+    count = 0
+    for i in range(len(arr)):
+        if arr[i] == 1:
+            count += 1
+        else:
+            count = 0
+        result[i] = count
+    df["consecutive_down_days"] = result
+    return df
+
+
+def apply_technical_filters(df: pd.DataFrame) -> pd.DataFrame:
+    df = add_trend_filter(df)
+    df = add_momentum_filter(df)
+    df = add_consecutive_down_days(df)
+    return df
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +151,7 @@ class SmallCapMomentumStrategy(IStrategy):
     # ------------------------------------------------------------------
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         """Build all filters and inject universe metadata."""
-        dataframe = apply_all_filters(dataframe)
+        dataframe = apply_technical_filters(dataframe)
 
         # Inject universe metadata if available
         pair = metadata.get("pair", "")

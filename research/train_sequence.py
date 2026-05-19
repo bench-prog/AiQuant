@@ -10,9 +10,9 @@ Output:
   ../freqtrade/user_data/models/feature_config.json
 
 Usage:
-  cd ai_engine
+  cd research
   pip install -r requirements.txt
-  python train_pytorch.py
+  python train_sequence.py
 """
 
 import json
@@ -24,14 +24,16 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from data_fetcher import fetch_funding_rate, fetch_ohlcv_ccxt, fetch_open_interest
+_data_dir = Path(__file__).parent.parent / "data"
+sys.path.insert(0, str(_data_dir))
+from data.market_data import fetch_funding_rate, fetch_ohlcv_ccxt, fetch_open_interest
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
 # Import shared feature engineering from strategies directory
 _strategies_dir = Path(__file__).parent.parent / "freqtrade" / "user_data" / "strategies"
 sys.path.insert(0, str(_strategies_dir))
-from feature_engineering import build_all_features, get_feature_columns  # noqa: E402
+from features import build_all_features, get_feature_columns  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

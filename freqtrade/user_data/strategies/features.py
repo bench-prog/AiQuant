@@ -114,7 +114,7 @@ def add_volume_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_price_structure(df: pd.DataFrame) -> pd.DataFrame:
+def add_candle_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["close_above_ema12"] = (df["close"] > ema(df["close"], 12)).astype(int)
     df["close_above_ema26"] = (df["close"] > ema(df["close"], 26)).astype(int)
@@ -142,7 +142,7 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_crypto_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_return_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["return_6h"] = df["close"].pct_change(6)
     df["return_24h"] = df["close"].pct_change(24)
@@ -198,10 +198,10 @@ def build_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df = add_momentum_features(df)
     df = add_volatility_features(df)
     df = add_volume_features(df)
-    df = add_price_structure(df)
+    df = add_candle_features(df)
     df = add_lag_features(df)
     df = add_time_features(df)
-    df = add_crypto_features(df)
+    df = add_return_features(df)
     df = add_funding_rate_features(df)
     df = add_open_interest_features(df)
     return df

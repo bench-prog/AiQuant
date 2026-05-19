@@ -3,9 +3,9 @@
 Independent script to read drift alerts and send Telegram notifications.
 
 Usage:
-    cd ai_engine
-    python drift_telegram.py --test          # Send a test message
-    python drift_telegram.py --check --limit 5  # Send last 5 alerts
+    cd research
+    python alert_cli.py --test          # Send a test message
+    python alert_cli.py --check --limit 5  # Send last 5 alerts
 """
 
 import argparse
@@ -91,7 +91,7 @@ def read_alerts(log_file: str, limit: int = 10) -> list[dict]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="AiQuant Drift Telegram Alert Tool")
-    parser.add_argument("--config", default="../freqtrade/config.json", help="Path to Freqtrade config.json")
+    parser.add_argument("--config", default="../freqtrade/config_ai_model.json", help="Path to Freqtrade config_ai_model.json")
     parser.add_argument("--log-file", default="../freqtrade/user_data/logs/drift_alerts.jsonl", help="Path to drift alerts JSONL")
     parser.add_argument("--limit", type=int, default=10, help="Number of recent alerts to send (default: 10)")
     parser.add_argument("--dry-run", action="store_true", help="Print message instead of sending")
@@ -112,7 +112,7 @@ def main() -> int:
     if args.test:
         text = (
             "✅ <b>AiQuant Drift Alert Test</b>\n"
-            "This is a test message from drift_telegram.py.\n"
+            "This is a test message from alert_cli.py.\n"
             "Your drift alert pipeline is working!"
         )
         ok = send_message(token, chat_id, text, dry_run=args.dry_run)

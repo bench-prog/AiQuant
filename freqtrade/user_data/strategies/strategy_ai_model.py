@@ -24,10 +24,82 @@ import pandas as pd
 from freqtrade.strategy import IStrategy
 
 # Shared feature engineering (same code used in training)
-from feature_engineering import build_all_features
+from features import build_all_features
 
 # Drift detection utilities (pure numpy/pandas, no external deps)
-from drift_utils import compute_psi, append_drift_alert, send_telegram_alert
+# Drift detection utilities (inline to keep strategy self-contained)
+
+def compute_stability_index(baseline_hist_counts: list, current_values: list, bins: int = 20, range_: tuple = (0, 1)) -> float:
+    """
+    Compute the Population Stability Index (PSI) to detect model drift.
+    Compares the training baseline histogram against the current prediction
+    distribution over a sliding window.
+    """
+    baseline = np.array(baseline_hist_counts, dtype=float)
+    baseline_pct = baseline / baseline.sum()
+    
+    current_hist, _ = np.histogram(current_values, bins=bins, range=range_)
+    current = np.array(current_hist, dtype=float)
+    current_sum = current.sum()
+    if current_sum == 0:
+        return float("inf")
+    current_pct = current / current_sum
+    
+    # Avoid division by zero and log(0)
+    baseline_pct = np.clip(baseline_pct, 1e-10, 1.0)
+    current_pct = np.clip(current_pct, 1e-10, 1.0)
+    
+    psi = np.sum((current_pct - baseline_pct) * np.log(current_pct / baseline_pct))
+    return float(psi)
+
+
+def send_telegram_alert(message: str, config_path: str = "/freqtrade/config_ai_model.json") -> bool:
+    """
+    Send message directly via Telegram Bot API.
+    Reads token and chat_id from Freqtrade's config_ai_model.json.
+    """
+    try:
+        import urllib.request
+        import urllib.parse
+    except ImportError:
+        logger.warning("urllib not available, cannot send Telegram alert.")
+        return False
+    
+    try:
+        with open(config_path, "r") as f:
+            config = json.load(f)
+        telegram_cfg = config.get("telegram", {})
+        if not telegram_cfg.get("enabled"):
+            return False
+        token = telegram_cfg.get("token")
+        chat_id = telegram_cfg.get("chat_id")
+        if not token or not chat_id:
+            return False
+        
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = urllib.parse.urlencode({"chat_id": chat_id, "text": message, "parse_mode": "HTML"}).encode()
+        req = urllib.request.Request(url, data=data, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status == 200
+    except Exception as e:
+        logger.warning(f"Failed to send Telegram alert: {e}")
+        return False
+
+
+def append_drift_alert(message: str, metrics: dict, log_dir: str = "/freqtrade/user_data/logs"):
+    """Append drift alert to JSONL file."""
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    alert_file = log_path / "drift_alerts.jsonl"
+    record = {
+        "timestamp": pd.Timestamp.now(tz="UTC").isoformat(),
+        "message": message,
+        **metrics,
+    }
+    with open(alert_file, "a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
 
 # Optional PyTorch import with graceful fallback
 try:
@@ -98,6 +170,11 @@ class AIModelStrategy(IStrategy):
     prediction_buffer: list = []
     candle_count: int = 0
 
+    # --- Drift monitor config ------------------------------------------------
+    DRIFT_WINDOW_SIZE: int = 500
+    DRIFT_CHECK_INTERVAL: int = 100
+    DRIFT_PSI_THRESHOLD: float = 0.25
+
     # ------------------------------------------------------------------
     # Bot lifecycle hooks
     # ------------------------------------------------------------------
@@ -147,7 +224,7 @@ class AIModelStrategy(IStrategy):
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         """
         Build all features and run model inference.
-        Uses the same feature_engineering module as training to ensure consistency.
+        Uses the same features module as training to ensure consistency.
 
         NOTE: Freqtrade does not natively inject fundingRate/openInterest columns
         into the strategy dataframe. If these columns are present (e.g. via custom
@@ -160,9 +237,9 @@ class AIModelStrategy(IStrategy):
 
         # --- Model inference ------------------------------------------------
         if self.model_type == "sklearn" and self.sklearn_model is not None:
-            dataframe = self._predict_sklearn(dataframe)
+            dataframe = self._predict_classifier(dataframe)
         elif self.model_type == "pytorch" and self.pytorch_model is not None:
-            dataframe = self._predict_pytorch(dataframe)
+            dataframe = self._predict_sequence_model(dataframe)
         else:
             # Fallback: neutral prediction
             dataframe["ai_prediction"] = 0.5
@@ -173,13 +250,19 @@ class AIModelStrategy(IStrategy):
 
         return dataframe
 
-    def _predict_sklearn(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+    def _predict_classifier(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Run sklearn model inference on the dataframe."""
-        # Use exact feature list from training config
+        # Use exact feature list from training config; fill missing columns with 0
+        # (fundingRate/openInterest may be absent in Freqtrade's default dataframe)
         feature_cols = self.feature_config.get("feature_columns", []) if self.feature_config else []
         if not feature_cols:
             logger.warning("[AiQuant] No feature_columns in config. Using all non-OHLCV columns.")
             feature_cols = [c for c in dataframe.columns if c not in {"open", "high", "low", "close", "volume", "date"}]
+
+        # Ensure all training features exist in dataframe; fill missing with 0
+        for col in feature_cols:
+            if col not in dataframe.columns:
+                dataframe[col] = 0.0
 
         # Drop rows with NaN features
         valid_idx = dataframe[feature_cols].notnull().all(axis=1)
@@ -199,11 +282,16 @@ class AIModelStrategy(IStrategy):
         dataframe["ai_prediction"] = dataframe["ai_prediction"].fillna(0.5)
         return dataframe
 
-    def _predict_pytorch(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+    def _predict_sequence_model(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Run PyTorch model inference on the dataframe."""
         feature_cols = self.feature_config.get("feature_columns", []) if self.feature_config else []
         if not feature_cols:
             feature_cols = [c for c in dataframe.columns if c not in {"open", "high", "low", "close", "volume", "date"}]
+
+        # Ensure all training features exist in dataframe; fill missing with 0
+        for col in feature_cols:
+            if col not in dataframe.columns:
+                dataframe[col] = 0.0
 
         valid_idx = dataframe[feature_cols].notnull().all(axis=1)
         df_valid = dataframe.loc[valid_idx].copy()
@@ -260,7 +348,7 @@ class AIModelStrategy(IStrategy):
         if len(self.prediction_buffer) < 100:
             return dataframe
 
-        psi = compute_psi(
+        psi = compute_stability_index(
             self.drift_baseline["hist_counts"],
             self.prediction_buffer,
             bins=self.drift_baseline.get("hist_bins", 20),
