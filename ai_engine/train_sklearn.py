@@ -210,6 +210,27 @@ def train_model(df: pd.DataFrame):
     )
     final_model.fit(X, y)
 
+    # Save drift baseline from training set predictions
+    train_pred = final_model.predict_proba(X)[:, 1]
+    baseline = {
+        "mean": float(train_pred.mean()),
+        "std": float(train_pred.std()),
+        "quantiles": {
+            str(q): float(v) for q, v in zip(
+                [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95],
+                np.quantile(train_pred, [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95])
+            )
+        },
+        "hist_counts": np.histogram(train_pred, bins=20, range=(0, 1))[0].tolist(),
+        "hist_bins": 20,
+        "hist_range": [0, 1],
+        "n_samples": len(train_pred),
+    }
+    baseline_path = MODEL_OUTPUT_DIR / "drift_baseline.json"
+    with open(baseline_path, "w") as f:
+        json.dump(baseline, f, indent=2)
+    logger.info(f"Drift baseline saved to {baseline_path}")
+
     # Evaluate on held-out TEST period (2024) — for sanity check only
     test_mask = df["date"] >= pd.Timestamp(TRAIN_END, tz="UTC")
     df_test = df.loc[test_mask].copy()

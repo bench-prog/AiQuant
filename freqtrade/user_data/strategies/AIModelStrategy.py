@@ -26,6 +26,9 @@ from freqtrade.strategy import IStrategy
 # Shared feature engineering (same code used in training)
 from feature_engineering import build_all_features
 
+# Drift detection utilities (pure numpy/pandas, no external deps)
+from drift_utils import compute_psi, append_drift_alert, send_telegram_alert
+
 # Optional PyTorch import with graceful fallback
 try:
     import torch
@@ -91,6 +94,9 @@ class AIModelStrategy(IStrategy):
     pytorch_model: Optional[nn.Module] = None
     feature_config: Optional[dict] = None
     model_type: Optional[str] = None  # 'sklearn', 'pytorch', or 'fallback'
+    drift_baseline: Optional[dict] = None
+    prediction_buffer: list = []
+    candle_count: int = 0
 
     # ------------------------------------------------------------------
     # Bot lifecycle hooks
@@ -130,6 +136,11 @@ class AIModelStrategy(IStrategy):
                 self.feature_config = json.load(f)
             logger.info(f"[AiQuant] Loaded feature config: {self.feature_config}")
 
+        # 4. Load drift baseline
+        self._load_drift_baseline()
+        self.prediction_buffer = []
+        self.candle_count = 0
+
     # ------------------------------------------------------------------
     # Feature engineering
     # ------------------------------------------------------------------
@@ -155,6 +166,10 @@ class AIModelStrategy(IStrategy):
         else:
             # Fallback: neutral prediction
             dataframe["ai_prediction"] = 0.5
+
+        # --- Drift monitoring ---
+        if self.model_type != "fallback" and self.drift_baseline is not None:
+            dataframe = self._update_drift_monitor(dataframe, metadata)
 
         return dataframe
 
@@ -212,6 +227,69 @@ class AIModelStrategy(IStrategy):
 
         dataframe.loc[valid_idx, "ai_prediction"] = predictions
         dataframe["ai_prediction"] = dataframe["ai_prediction"].fillna(0.5)
+        return dataframe
+
+    # ------------------------------------------------------------------
+    # Drift monitoring
+    # ------------------------------------------------------------------
+    def _load_drift_baseline(self) -> None:
+        baseline_path = MODEL_DIR / "drift_baseline.json"
+        if baseline_path.exists():
+            with open(baseline_path, "r") as f:
+                self.drift_baseline = json.load(f)
+            logger.info(f"[AiQuant] Loaded drift baseline from {baseline_path}")
+        else:
+            self.drift_baseline = None
+            logger.warning("[AiQuant] No drift_baseline.json found. Drift monitoring disabled.")
+
+    def _update_drift_monitor(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
+        """Update prediction buffer and check for drift periodically."""
+        latest_pred = dataframe["ai_prediction"].iloc[-1] if dataframe["ai_prediction"].notna().any() else None
+        if latest_pred is not None and not np.isnan(latest_pred):
+            self.prediction_buffer.append(float(latest_pred))
+            if len(self.prediction_buffer) > self.DRIFT_WINDOW_SIZE:
+                self.prediction_buffer.pop(0)
+
+        self.candle_count += 1
+
+        # Default PSI column
+        dataframe["drift_psi"] = np.nan
+
+        if self.candle_count % self.DRIFT_CHECK_INTERVAL != 0:
+            return dataframe
+        if len(self.prediction_buffer) < 100:
+            return dataframe
+
+        psi = compute_psi(
+            self.drift_baseline["hist_counts"],
+            self.prediction_buffer,
+            bins=self.drift_baseline.get("hist_bins", 20),
+            range_=tuple(self.drift_baseline.get("hist_range", [0, 1])),
+        )
+        dataframe["drift_psi"] = psi
+
+        if psi > self.DRIFT_PSI_THRESHOLD:
+            pair = metadata.get("pair", "N/A")
+            msg = (
+                f"🚨 <b>AiQuant Model Drift Alert</b>\n"
+                f"Pair: {pair}\n"
+                f"PSI: {psi:.4f} (threshold: {self.DRIFT_PSI_THRESHOLD})\n"
+                f"Buffer: {len(self.prediction_buffer)} samples\n"
+                f"Model: {self.model_type}"
+            )
+            logger.warning(f"[DRIFT] {msg}")
+            append_drift_alert(msg, {"psi": psi, "pair": pair, "model_type": self.model_type})
+
+            # Try Freqtrade native Telegram
+            try:
+                if hasattr(self.dp, "send_msg"):
+                    self.dp.send_msg(msg, always_send=True)
+            except Exception as e:
+                logger.warning(f"[DRIFT] dp.send_msg failed: {e}")
+
+            # Fallback: direct Telegram API
+            send_telegram_alert(msg)
+
         return dataframe
 
     # ------------------------------------------------------------------

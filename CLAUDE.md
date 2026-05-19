@@ -43,16 +43,18 @@ AiQuant/
 │       ├── strategies/
 │       │   ├── __init__.py
 │       │   ├── feature_engineering.py  # **Shared indicators + feature pipelines**
-│       │   └── AIModelStrategy.py      # Strategy with AI model loading
-│       ├── models/                     # Trained AI models (.pkl, .pt) + feature_config.json
+│       │   ├── drift_utils.py          # **Drift detection (PSI) + Telegram sender**
+│       │   └── AIModelStrategy.py      # Strategy with AI model loading + online drift monitor
+│       ├── models/                     # Trained AI models (.pkl, .pt) + feature_config.json + drift_baseline.json
 │       ├── data/                       # Historical price data downloaded by Freqtrade
 │       ├── notebooks/                  # Jupyter notebooks for research
-│       └── logs/                       # Strategy logs
+│       └── logs/                       # Strategy logs + drift_alerts.jsonl
 ├── ai_engine/                          # Local AI model training scripts
 │   ├── requirements.txt
-│   ├── data_fetcher.py                 # CCXT-based OHLCV downloader with caching
+│   ├── data_fetcher.py                 # CCXT-based OHLCV / funding rate / open interest downloader with caching
 │   ├── features.py                     # Re-exports from feature_engineering.py
-│   ├── train_sklearn.py                # LightGBM with strict temporal split
+│   ├── drift_telegram.py               # Standalone CLI for drift Telegram alerts
+│   ├── train_sklearn.py                # LightGBM with strict temporal split + drift baseline export
 │   └── train_pytorch.py              # LSTM with strict temporal split
 └── .gitignore
 ```
@@ -172,10 +174,12 @@ The strategy `AIModelStrategy.py` demonstrates the integration pattern:
 |------|---------|----------------|
 | `freqtrade/config.json` | Exchange keys, trading pairs, timeframe, risk limits | Always edit before first run |
 | `freqtrade/user_data/strategies/feature_engineering.py` | **Shared pure-pandas indicators and feature pipelines** | When adding new features — affects both training and backtest |
-| `freqtrade/user_data/strategies/AIModelStrategy.py` | Core strategy logic + AI inference | Modify signal thresholds or add filters |
-| `ai_engine/train_sklearn.py` | Train LightGBM with temporal split | When tuning hyperparameters or target horizon |
+| `freqtrade/user_data/strategies/AIModelStrategy.py` | Core strategy + AI inference + online drift monitor | Modify signal thresholds or add filters |
+| `freqtrade/user_data/strategies/drift_utils.py` | PSI computation, Telegram alert sender, JSONL logger | When tuning drift thresholds or alert format |
+| `ai_engine/train_sklearn.py` | Train LightGBM + export drift baseline | When tuning hyperparameters or target horizon |
 | `ai_engine/train_pytorch.py` | Train LSTM with temporal split | For neural network experiments |
-| `ai_engine/data_fetcher.py` | CCXT OHLCV downloader with caching | When switching exchanges or timeframes |
+| `ai_engine/data_fetcher.py` | CCXT OHLCV / funding rate / OI downloader with caching | When switching exchanges or timeframes |
+| `ai_engine/drift_telegram.py` | Standalone CLI to send/test drift Telegram alerts | Rarely needed |
 | `docker/Dockerfile` | Custom image with ML dependencies | When adding new Python packages |
 | `docker/docker-compose.yml` | Container orchestration | Rarely needed |
 
@@ -221,12 +225,15 @@ The strategy `AIModelStrategy.py` demonstrates the integration pattern:
 
 ---
 
+## Completed
+
+- [x] **Add funding rate and open interest features** — `data_fetcher.py` + `feature_engineering.py`, 9 new features, graceful fallback when data unavailable
+- [x] **Telegram bot alerts for model drift detection** — Online PSI monitor in `AIModelStrategy.py`, `drift_utils.py`, `drift_telegram.py` CLI, drift baseline exported during training
+
 ## Roadmap Ideas
 
 - [ ] Integrate on-chain data (exchange inflows/outflows) via Glassnode/Dune API
-- [ ] Add funding rate and open interest features
 - [ ] Build RL-based position sizing module
-- [ ] Telegram bot alerts for model drift detection
 - [ ] Multi-exchange arbitrage strategy (may require Hummingbot instead)
 
 ---

@@ -35,7 +35,10 @@ docker compose -f docker/docker-compose.yml up -d
 
 - `freqtrade/` - Freqtrade 配置与策略
   - `user_data/strategies/feature_engineering.py` - **共享特征工程**（训练与回测共用）
+  - `user_data/strategies/drift_utils.py` - **模型漂移检测工具**（PSI 计算、Telegram 告警）
 - `ai_engine/` - AI 模型训练脚本
+  - `data_fetcher.py` - 数据下载（含资金费率、持仓量）
+  - `drift_telegram.py` - Telegram 漂移告警独立脚本
 - `docker/` - Docker 编排与自定义镜像
 - `CLAUDE.md` - AI 助手可读的项目文档
 
@@ -44,6 +47,8 @@ docker compose -f docker/docker-compose.yml up -d
 - **纯 pandas/numpy 技术指标**：不依赖 pandas-ta / numba，兼容 Python 3.14
 - **严格时间切分**：训练集仅到 2023-12-31，避免数据泄露
 - **共享特征模块**：`feature_engineering.py` 同时用于训练脚本和 Freqtrade 策略，确保特征一致
+- **合约特征增强**：已集成资金费率（funding rate）和持仓量（open interest）特征
+- **模型漂移监控**：在线 PSI 检测 + Telegram 告警，实时发现模型失效
 
 ## 安全提示
 
