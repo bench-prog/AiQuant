@@ -98,7 +98,7 @@ Training scripts download historical crypto data via **ccxt** from Binance. No e
 cd research
 pip install -r requirements.txt
 python train_classifier.py        # Downloads BTC/USDT 1h, trains LightGBM
-python train_sequence.py        # Or train an LSTM
+python train_sequence.py       # Or train an LSTM
 ```
 
 Data is automatically cached to `data/cache/` as Parquet files to avoid re-downloading.
@@ -133,15 +133,29 @@ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
 
 ### 6. Run Backtest
 
+**AI Model Strategy** (default config):
 ```bash
 docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     backtesting --strategy AIModelStrategy --timerange 20240101-20241231
 ```
 
+**Small-Cap Momentum Strategy** (specify config):
+```bash
+docker compose -f deploy/docker-compose.yml run --rm freqtrade \
+    backtesting --config /freqtrade/config_smallcap.json --strategy SmallCapMomentumStrategy --timerange 20240101-20241231
+```
+
 ### 7. Start Paper Trading (Dry Run)
 
+**AI Model Strategy** (default):
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
+```
+
+**Small-Cap Momentum Strategy** (override command):
+```bash
+docker compose -f deploy/docker-compose.yml run --rm freqtrade \
+    trade --config /freqtrade/config_smallcap.json --strategy SmallCapMomentumStrategy
 ```
 
 Access the Web UI at `http://localhost:8080`.
@@ -175,7 +189,8 @@ The strategy `strategy_ai_model.py` demonstrates the integration pattern:
 
 | File | Purpose | When to Modify |
 |------|---------|----------------|
-| `freqtrade/config_ai_model.json` | Exchange keys, trading pairs, timeframe, risk limits | Always edit before first run |
+| `freqtrade/config_ai_model.json` | Exchange keys, trading pairs, timeframe, risk limits for AI model strategy | Always edit before first run |
+| `freqtrade/config_smallcap.json` | Exchange keys, pair whitelist, protections for small-cap strategy | When running small-cap strategy |
 | `freqtrade/user_data/strategies/features.py` | **Shared pure-pandas indicators and feature pipelines** | When adding new features — affects both training and backtest |
 | `freqtrade/user_data/strategies/strategy_ai_model.py` | Core strategy + AI inference + inline drift monitor + Telegram alerts | Modify signal thresholds or add filters |
 | `freqtrade/user_data/strategies/strategy_smallcap.py` | Small-cap momentum strategy with inline EMA/RSI filters | When tuning universe criteria or technical filters |
@@ -193,28 +208,28 @@ The strategy `strategy_ai_model.py` demonstrates the integration pattern:
 
 ```bash
 # Download historical data
- docker compose -f deploy/docker-compose.yml run --rm freqtrade \
+docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     download-data --pairs BTC/USDT ETH/USDT --timeframe 1h --timerange 20230101-20241231
 
 # Hyperparameter optimization
- docker compose -f deploy/docker-compose.yml run --rm freqtrade \
+docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     hyperopt --strategy AIModelStrategy --spaces buy roi stoploss
 
 # List available strategies
- docker compose -f deploy/docker-compose.yml run --rm freqtrade list-strategies
+docker compose -f deploy/docker-compose.yml run --rm freqtrade list-strategies
 
 # View logs
- docker compose -f deploy/docker-compose.yml logs -f freqtrade
+docker compose -f deploy/docker-compose.yml logs -f freqtrade
 
 # Enter container shell
- docker compose -f deploy/docker-compose.yml exec freqtrade /bin/bash
+docker compose -f deploy/docker-compose.yml exec freqtrade /bin/bash
 ```
 
 ---
 
 ## Important Constraints & Notes
 
-1. **Never commit API keys.** `config_ai_model.json` contains secrets. It is listed in `.gitignore`.
+1. **Never commit API keys.** `config_ai_model.json` and `config_smallcap.json` contain secrets. Both are listed in `.gitignore`.
 2. **Dry Run First.** Freqtrade defaults to `dry_run: true`. Verify profitability in backtest + paper trade before live trading.
 3. **Temporal Split Discipline:** Training scripts hard-code `TRAIN_END = "2023-12-31"`. Do not expand the training window to include the backtest period, or you will invalidate the results.
 4. **AI Model Lifecycle:** Models go stale quickly in crypto. Plan for weekly/bi-weekly retraining.

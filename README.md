@@ -23,12 +23,21 @@ python train_sequence.py       # 或 LSTM
 docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     download-data --pairs BTC/USDT ETH/USDT --timeframe 1h --timerange 20240101-20241231
 
-# 5. 回测
+# 5. 回测（AI 模型策略，默认配置）
 docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     backtesting --strategy AIModelStrategy --timerange 20240101-20241231
 
+# 5b. 回测（小市值动量策略，需指定配置）
+docker compose -f deploy/docker-compose.yml run --rm freqtrade \
+    backtesting --config /freqtrade/config_smallcap.json --strategy SmallCapMomentumStrategy --timerange 20240101-20241231
+
 # 6. 启动模拟交易（Web UI: http://localhost:8080）
+# 默认启动 AI 模型策略
 docker compose -f deploy/docker-compose.yml up -d
+
+# 6b. 启动小市值动量策略（覆盖默认命令）
+docker compose -f deploy/docker-compose.yml run --rm freqtrade \
+    trade --config /freqtrade/config_smallcap.json --strategy SmallCapMomentumStrategy
 ```
 
 ## 项目结构
@@ -58,4 +67,4 @@ docker compose -f deploy/docker-compose.yml up -d
 ## 安全提示
 
 - `dry_run` 默认为 `true`，实盘前务必完成回测与模拟交易
-- `config_ai_model.json` 已加入 `.gitignore`，切勿泄露 API Key
+- `config_ai_model.json` 和 `config_smallcap.json` 均已加入 `.gitignore`，切勿泄露 API Key
