@@ -1,0 +1,22 @@
+services:
+  freqtrade:
+    image: freqtradeorg/freqtrade:stable
+    container_name: aiquant-freqtrade
+    volumes:
+      # Mount local user_data to container's freqtrade user_data
+      - ../freqtrade/user_data:/freqtrade/user_data
+      # Mount config as read-only for safety
+      - ../freqtrade/config.json:/freqtrade/config.json:ro
+    # Freqtrade standard port for REST API / Web UI
+    ports:
+      - "8080:8080"
+    # Default command: run trading with AIModelStrategy
+    # Override this via docker compose run for backtesting/hyperopt
+    command: >
+      trade
+      --config /freqtrade/config.json
+      --strategy AIModelStrategy
+    restart: unless-stopped
+    environment:
+      # Optional: pass TZ for accurate timestamp handling
+      - TZ=Asia/Shanghai

@@ -1,0 +1,50 @@
+# Secrets & Configs
+freqtrade/config.json
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+
+# Models & Data (large files)
+*.pkl
+*.pt
+*.pth
+*.h5
+freqtrade/user_data/data/
+!freqtrade/user_data/data/.gitkeep
+freqtrade/user_data/models/*.pkl
+freqtrade/user_data/models/*.pt
+freqtrade/user_data/models/*.pth
+
+# Freqtrade logs
+freqtrade/user_data/logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Backtest results
+freqtrade/user_data/backtest_results/
+freqtrade/user_data/hyperopt_results/
+
+# Notebooks output
+ai_engine/notebooks/*.png
+ai_engine/notebooks/*.csv
