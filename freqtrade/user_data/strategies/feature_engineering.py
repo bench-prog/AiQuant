@@ -150,6 +150,49 @@ def add_crypto_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def add_funding_rate_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add funding rate related features.
+
+    Expects df to contain a 'fundingRate' column (merged from funding rate data).
+    If the column is missing, returns the dataframe unchanged.
+    """
+    if "fundingRate" not in df.columns:
+        return df
+
+    df = df.copy()
+    df["funding_rate"] = df["fundingRate"]
+    df["funding_rate_ema_8"] = ema(df["funding_rate"], 8)
+    df["funding_rate_sign"] = np.sign(df["funding_rate"])
+    df["funding_rate_change"] = df["funding_rate"].diff()
+    return df
+
+
+def add_open_interest_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add open interest related features.
+
+    Expects df to contain an 'openInterest' column (merged from OI data).
+    If the column is missing, returns the dataframe unchanged.
+    """
+    if "openInterest" not in df.columns:
+        return df
+
+    df = df.copy()
+    # Use log scale to handle large absolute values
+    df["open_interest"] = np.log1p(df["openInterest"])
+    df["oi_ema_12"] = ema(df["open_interest"], 12)
+    df["oi_ema_24"] = ema(df["open_interest"], 24)
+    df["oi_change_1h"] = df["open_interest"].diff(1)
+    df["oi_change_6h"] = df["open_interest"].diff(6)
+    df["oi_change_24h"] = df["open_interest"].diff(24)
+
+    # OI velocity: OI change rate normalized by volume (proxy for intensity of position build-up/liquidation)
+    volume_safe = df["volume"].replace(0, np.nan)
+    df["oi_velocity"] = df["oi_change_1h"] / volume_safe
+    return df
+
+
 def build_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df = add_trend_features(df)
     df = add_momentum_features(df)
@@ -159,6 +202,8 @@ def build_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df = add_lag_features(df)
     df = add_time_features(df)
     df = add_crypto_features(df)
+    df = add_funding_rate_features(df)
+    df = add_open_interest_features(df)
     return df
 
 

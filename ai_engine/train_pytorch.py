@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from data_fetcher import fetch_ohlcv_ccxt
+from data_fetcher import fetch_funding_rate, fetch_ohlcv_ccxt, fetch_open_interest
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
@@ -69,6 +69,68 @@ def load_data():
     return df
 
 
+def merge_external_data(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge funding rate and open interest data into the OHLCV dataframe.
+    Uses merge_asof for time-alignment without look-ahead bias.
+    """
+    df = df.copy()
+
+    # --- Funding Rate (8h intervals) ---
+    try:
+        fr_df = fetch_funding_rate(
+            symbol="BTC/USDT",
+            start_date=TRAIN_START,
+            end_date=FULL_END,
+            exchange_name="binance",
+            use_cache=True,
+        )
+        if not fr_df.empty:
+            df = pd.merge_asof(
+                df,
+                fr_df,
+                on="date",
+                direction="backward",
+            )
+            df["fundingRate"] = df["fundingRate"].ffill()
+            logger.info(f"Merged funding rate data ({len(fr_df)} records).")
+        else:
+            logger.warning("No funding rate data returned; proceeding without it.")
+    except Exception as e:
+        logger.warning(f"Failed to fetch/merge funding rate: {e}")
+
+    # --- Open Interest (1h snapshots) ---
+    try:
+        oi_df = fetch_open_interest(
+            symbol="BTC/USDT",
+            start_date=TRAIN_START,
+            end_date=FULL_END,
+            exchange_name="binance",
+            timeframe="1h",
+            use_cache=True,
+        )
+        if not oi_df.empty:
+            df = pd.merge_asof(
+                df,
+                oi_df,
+                on="date",
+                direction="backward",
+            )
+            df["openInterest"] = df["openInterest"].ffill()
+            logger.info(f"Merged open interest data ({len(oi_df)} records).")
+        else:
+            logger.warning("No open interest data returned; proceeding without it.")
+    except Exception as e:
+        logger.warning(f"Failed to fetch/merge open interest: {e}")
+
+    # Final safety: any remaining NaNs in external columns -> 0
+    for col in ["fundingRate", "openInterest"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
+
+    return df
+
+
 class CryptoLSTM(nn.Module):
     def __init__(self, input_size: int, hidden_size: int = HIDDEN_SIZE, num_layers: int = NUM_LAYERS, dropout: float = DROPOUT):
         super().__init__()
@@ -106,6 +168,7 @@ class CryptoDataset(Dataset):
 
 def train():
     df = load_data()
+    df = merge_external_data(df)
     df = build_all_features(df)
     df["target"] = (df["close"].shift(-HORIZON) > df["close"]).astype(float)
 

@@ -22,6 +22,8 @@ from feature_engineering import (  # noqa: E402
     add_lag_features,
     add_time_features,
     add_crypto_features,
+    add_funding_rate_features,
+    add_open_interest_features,
     build_all_features,
     get_feature_columns,
 )

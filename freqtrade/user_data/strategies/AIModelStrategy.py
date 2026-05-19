@@ -137,6 +137,12 @@ class AIModelStrategy(IStrategy):
         """
         Build all features and run model inference.
         Uses the same feature_engineering module as training to ensure consistency.
+
+        NOTE: Freqtrade does not natively inject fundingRate/openInterest columns
+        into the strategy dataframe. If these columns are present (e.g. via custom
+        data-provider or dataframe prepopulation), build_all_features will compute
+        the derived features. If they are absent, the feature functions gracefully
+        skip them and the strategy continues to work with the existing features.
         """
         # Build all features (identical to training pipeline)
         dataframe = build_all_features(dataframe)
