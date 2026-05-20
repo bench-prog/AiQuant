@@ -39,6 +39,44 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> 
     return tr.rolling(window=length).mean()
 
 
+def adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """
+    Average Directional Index (ADX) with +DI and -DI.
+
+    Returns:
+        adx: Trend strength (0-100)
+        plus_di: Positive Directional Indicator
+        minus_di: Negative Directional Indicator
+    """
+    # True Range
+    high_low = high - low
+    high_close = (high - close.shift()).abs()
+    low_close = (low - close.shift()).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+
+    # +DM and -DM
+    plus_dm = high.diff()
+    minus_dm = -low.diff()
+    plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+    minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+
+    # Smooth TR, +DM, -DM using Wilder's smoothing (RMA)
+    alpha = 1.0 / length
+    tr_smooth = tr.ewm(alpha=alpha, min_periods=length).mean()
+    plus_dm_smooth = plus_dm.ewm(alpha=alpha, min_periods=length).mean()
+    minus_dm_smooth = minus_dm.ewm(alpha=alpha, min_periods=length).mean()
+
+    # +DI and -DI
+    plus_di = 100 * plus_dm_smooth / tr_smooth
+    minus_di = 100 * minus_dm_smooth / tr_smooth
+
+    # DX and ADX
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    adx_series = dx.ewm(alpha=alpha, min_periods=length).mean()
+
+    return adx_series, plus_di, minus_di
+
+
 def bbands(series: pd.Series, length: int = 20, std: float = 2.0):
     middle = series.rolling(window=length).mean()
     sigma = series.rolling(window=length).std()
