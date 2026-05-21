@@ -1,15 +1,15 @@
 """
-Train a scikit-learn / LightGBM model for crypto direction prediction.
+训练 scikit-learn / LightGBM 方向预测模型。
 
-Uses a strict temporal train/test split to avoid look-ahead bias:
-  Training: 2022-01-01 ~ 2023-12-31
-  Test (for Freqtrade backtest): 2024-01-01 ~ 2024-12-31
+采用严格的时间切分避免前瞻偏差:
+  训练集: 2022-01-01 ~ 2023-12-31
+  测试集 (仅用于 Freqtrade 回测评估): 2024-01-01 ~ 2024-12-31
 
-Output:
+输出:
   ../freqtrade/user_data/models/sklearn_model.pkl
   ../freqtrade/user_data/models/feature_config.json
 
-Usage:
+用法:
   cd research
   pip install -r requirements.txt
   python train_classifier.py
@@ -57,7 +57,7 @@ HORIZON = 1
 
 
 def load_data() -> pd.DataFrame:
-    """Load historical OHLCV data from Binance via ccxt."""
+    """通过 ccxt 从 Binance 加载历史 OHLCV 数据。"""
     df = fetch_ohlcv_ccxt(
         symbol=SYMBOL,
         timeframe=TIMEFRAME,
@@ -72,8 +72,8 @@ def load_data() -> pd.DataFrame:
 
 def merge_external_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Merge funding rate and open interest data into the OHLCV dataframe.
-    Delegates to the unified data service layer.
+    将资金费率和持仓量数据合并进 OHLCV DataFrame。
+    委托给统一数据服务层处理。
     """
     df = df.copy()
 
@@ -97,7 +97,7 @@ def merge_external_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def prepare_target(df: pd.DataFrame, horizon: int = HORIZON) -> pd.DataFrame:
-    """Create binary target: 1 if future return > 0, else 0."""
+    """生成二分类目标: future return > 0 则为 1，否则为 0。"""
     df = df.copy()
     future_return = df["close"].shift(-horizon) / df["close"] - 1
     df["target"] = (future_return > 0).astype(int)
@@ -105,14 +105,14 @@ def prepare_target(df: pd.DataFrame, horizon: int = HORIZON) -> pd.DataFrame:
 
 
 def train_model(df: pd.DataFrame):
-    """Train LightGBM with time-series cross-validation on TRAIN period only."""
+    """在 TRAIN 时间段内训练 LightGBM，使用时序交叉验证。"""
     df = build_all_features(df)
     df = prepare_target(df)
 
     feature_cols = get_feature_columns(df)
     feature_cols = [c for c in feature_cols if c != "target"]
 
-    # STRICT TEMPORAL SPLIT: only use data up to TRAIN_END for training
+    # 严格时间切分: 训练集只用 TRAIN_END 之前的数据
     train_mask = df["date"] < pd.Timestamp(TRAIN_END, tz="UTC")
     df_train = df.loc[train_mask].copy()
 
@@ -130,7 +130,7 @@ def train_model(df: pd.DataFrame):
     logger.info(f"Features used ({len(feature_cols)}): {feature_cols[:5]}...")
     logger.info(f"Training samples: {len(X)}, Positive ratio: {y.mean():.2%}")
 
-    # Time-series CV (respect temporal order!)
+    # 时序交叉验证（必须保持时间顺序）
     tscv = TimeSeriesSplit(n_splits=5)
     auc_scores = []
 
@@ -161,7 +161,7 @@ def train_model(df: pd.DataFrame):
 
     logger.info(f"Mean CV AUC: {np.mean(auc_scores):.4f} (+/- {np.std(auc_scores):.4f})")
 
-    # Final model: train on entire TRAIN period
+    # 最终模型: 在整个 TRAIN 时间段上训练
     final_model = LGBMClassifier(
         n_estimators=500,
         learning_rate=0.03,
@@ -178,7 +178,7 @@ def train_model(df: pd.DataFrame):
     )
     final_model.fit(X, y)
 
-    # Save drift baseline from training set predictions
+    # 从训练集预测分布导出漂移监控基线
     train_pred = final_model.predict_proba(X)[:, 1]
     baseline = {
         "mean": float(train_pred.mean()),
@@ -199,7 +199,7 @@ def train_model(df: pd.DataFrame):
         json.dump(baseline, f, indent=2)
     logger.info(f"Drift baseline saved to {baseline_path}")
 
-    # Evaluate on held-out TEST period (2024) — for sanity check only
+    # 在预留 TEST 集 (2024) 上评估 — 仅作 sanity check
     test_mask = df["date"] >= pd.Timestamp(TRAIN_END, tz="UTC")
     df_test = df.loc[test_mask].copy()
     test_valid = df_test[feature_cols + ["target"]].notnull().all(axis=1)
@@ -214,12 +214,12 @@ def train_model(df: pd.DataFrame):
     else:
         logger.warning("No test data available for evaluation.")
 
-    # Save model
+    # 保存模型
     model_path = MODEL_OUTPUT_DIR / "sklearn_model.pkl"
     joblib.dump(final_model, model_path)
     logger.info(f"Model saved to {model_path}")
 
-    # Save feature config
+    # 保存特征配置
     config = {
         "model_type": "lightgbm",
         "feature_columns": feature_cols,

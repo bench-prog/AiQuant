@@ -1,16 +1,15 @@
 """
-AiQuant AI Model Strategy Template
+AiQuant AI 模型策略 (AIModelStrategy)
 
-This strategy demonstrates how to integrate a custom AI model (scikit-learn or PyTorch)
-into Freqtrade. The model is loaded once at bot startup and used to generate entry/exit
-signals based on technical indicator features.
+集成自定义 scikit-learn 或 PyTorch 模型到 Freqtrade。
+模型在 bot_start() 中一次性加载，基于技术指标特征生成入场/出场信号。
 
-Model files should be placed in:
+模型文件路径:
   /freqtrade/user_data/models/sklearn_model.pkl
   /freqtrade/user_data/models/pytorch_model.pt
   /freqtrade/user_data/models/feature_config.json
 
-If no model is found, the strategy falls back to a simple RSI-based signal for demonstration.
+若未找到模型，策略回退到简单的 RSI 信号（仅供演示）。
 """
 
 import json
@@ -53,9 +52,10 @@ from features import build_all_features
 
 def compute_stability_index(baseline_hist_counts: list, current_values: list, bins: int = 20, range_: tuple = (0, 1)) -> float:
     """
-    Compute the Population Stability Index (PSI) to detect model drift.
-    Compares the training baseline histogram against the current prediction
-    distribution over a sliding window.
+    计算群体稳定性指数 (PSI) 用于检测模型漂移。
+
+    将训练基线的直方图与当前预测分布（滑动窗口）做对比。
+    PSI > 0.25 通常认为分布发生显著偏移。
     """
     baseline = np.array(baseline_hist_counts, dtype=float)
     baseline_pct = baseline / baseline.sum()
@@ -77,8 +77,8 @@ def compute_stability_index(baseline_hist_counts: list, current_values: list, bi
 
 def send_telegram_alert(message: str, config_path: str = "/freqtrade/config_ai_model.json") -> bool:
     """
-    Send message directly via Telegram Bot API.
-    Reads token and chat_id from Freqtrade's config_ai_model.json.
+    通过 Telegram Bot API 直接发送消息。
+    从 Freqtrade 配置中读取 token 和 chat_id。
     """
     try:
         import urllib.request
@@ -109,7 +109,7 @@ def send_telegram_alert(message: str, config_path: str = "/freqtrade/config_ai_m
 
 
 def append_drift_alert(message: str, metrics: dict, log_dir: str = "/freqtrade/user_data/logs"):
-    """Append drift alert to JSONL file."""
+    """将漂移告警追加写入 JSONL 文件。"""
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
     alert_file = log_path / "drift_alerts.jsonl"
@@ -123,13 +123,15 @@ def append_drift_alert(message: str, metrics: dict, log_dir: str = "/freqtrade/u
 
 
 
-# Optional PyTorch import with graceful fallback
+# PyTorch 可选导入，未安装时优雅降级
 try:
     import torch
     import torch.nn as nn
     TORCH_AVAILABLE = True
 
     class SimpleLSTM(nn.Module):
+        """LSTM 序列模型，架构与 research/train_sequence.py 的 CryptoLSTM 保持一致。"""
+
         def __init__(self, input_size: int, hidden_size: int = 64, num_layers: int = 2, dropout: float = 0.2):
             super().__init__()
             self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout if num_layers > 1 else 0.0)
@@ -171,11 +173,9 @@ EXIT_THRESHOLD = 0.4    # Model probability < 0.4 -> exit long
 # Strategy
 # ---------------------------------------------------------------------------
 class AIModelStrategy(IStrategy):
-    """
-    AI-driven strategy that loads an external ML model for signal generation.
-    """
+    """加载外部 ML 模型生成交易信号的 AI 驱动策略。"""
 
-    # Strategy metadata
+    # --- 策略元数据 ---
     timeframe = "1h"
     stoploss = -0.10
     trailing_stop = True
@@ -190,32 +190,32 @@ class AIModelStrategy(IStrategy):
         "120": 0.02
     }
 
-    # --- Model state -------------------------------------------------------
+    # --- 模型状态 ---
     sklearn_model: Optional[object] = None
     pytorch_model: Optional[nn.Module] = None
     feature_config: Optional[dict] = None
-    model_type: Optional[str] = None  # 'sklearn', 'pytorch', or 'fallback'
+    model_type: Optional[str] = None  # 'sklearn', 'pytorch', 或 'fallback'
     drift_baseline: Optional[dict] = None
     prediction_buffer: list = []
     candle_count: int = 0
 
-    # Scaler params loaded from feature_config (for PyTorch sequence model)
+    # 从 feature_config 加载的 StandardScaler 参数（PyTorch 序列模型用）
     scaler_mean: Optional[np.ndarray] = None
     scaler_scale: Optional[np.ndarray] = None
 
-    # --- Drift monitor config ------------------------------------------------
+    # --- 漂移监控配置 ---
     DRIFT_WINDOW_SIZE: int = 500
     DRIFT_CHECK_INTERVAL: int = 100
     DRIFT_PSI_THRESHOLD: float = 0.25
 
     # ------------------------------------------------------------------
-    # Bot lifecycle hooks
+    # Bot 生命周期钩子
     # ------------------------------------------------------------------
     def bot_start(self, **kwargs) -> None:
-        """Load AI model once when the bot starts."""
+        """Bot 启动时一次性加载 AI 模型。"""
         logger.info("[AiQuant] Loading AI model...")
 
-        # 1. Try sklearn
+        # 1. 尝试加载 sklearn 模型
         if SKLEARN_MODEL_PATH.exists():
             try:
                 self.sklearn_model = joblib.load(SKLEARN_MODEL_PATH)
@@ -271,12 +271,12 @@ class AIModelStrategy(IStrategy):
         self.candle_count = 0
 
     # ------------------------------------------------------------------
-    # Feature engineering
+    # 特征工程
     # ------------------------------------------------------------------
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         """
-        Build all features and run model inference.
-        Uses the same features module as training to ensure consistency.
+        构建全部特征并运行模型推理。
+        使用与训练相同的 features 模块，确保特征一致性。
         """
         pair = metadata.get("pair", "")
         exchange_name = self.config.get("exchange", {}).get("name", "binance")
@@ -320,7 +320,7 @@ class AIModelStrategy(IStrategy):
         return dataframe
 
     def _prepare_features(self, dataframe: pd.DataFrame) -> tuple[list[str], pd.Series, pd.DataFrame]:
-        """Resolve feature columns, fill missing with 0, and return valid rows.
+        """解析特征列，缺失列填 0，返回有效行索引。
 
         Returns:
             (feature_cols, valid_idx, df_valid)
@@ -338,7 +338,7 @@ class AIModelStrategy(IStrategy):
         return feature_cols, valid_idx, dataframe
 
     def _predict_classifier(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Run sklearn model inference on the dataframe."""
+        """运行 sklearn 模型推理。"""
         feature_cols, valid_idx, dataframe = self._prepare_features(dataframe)
         X = dataframe.loc[valid_idx, feature_cols].values
 
@@ -356,7 +356,7 @@ class AIModelStrategy(IStrategy):
         return dataframe
 
     def _predict_sequence_model(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Run PyTorch model inference on the dataframe."""
+        """运行 PyTorch 序列模型推理。"""
         feature_cols, valid_idx, dataframe = self._prepare_features(dataframe)
         df_valid = dataframe.loc[valid_idx].copy()
 
@@ -386,9 +386,10 @@ class AIModelStrategy(IStrategy):
         return dataframe
 
     # ------------------------------------------------------------------
-    # Drift monitoring
+    # 漂移监控
     # ------------------------------------------------------------------
     def _load_drift_baseline(self) -> None:
+        """加载训练时导出的漂移基线。"""
         baseline_path = MODEL_DIR / "drift_baseline.json"
         if baseline_path.exists():
             with open(baseline_path, "r") as f:
@@ -399,7 +400,7 @@ class AIModelStrategy(IStrategy):
             logger.warning("[AiQuant] No drift_baseline.json found. Drift monitoring disabled.")
 
     def _update_drift_monitor(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
-        """Update prediction buffer and check for drift periodically."""
+        """更新预测缓冲区，并周期性检测模型漂移。"""
         latest_pred = dataframe["ai_prediction"].iloc[-1] if dataframe["ai_prediction"].notna().any() else None
         if latest_pred is not None and not np.isnan(latest_pred):
             self.prediction_buffer.append(float(latest_pred))
@@ -449,7 +450,7 @@ class AIModelStrategy(IStrategy):
         return dataframe
 
     # ------------------------------------------------------------------
-    # Signal generation
+    # 信号生成
     # ------------------------------------------------------------------
     def populate_entry_trend(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         dataframe.loc[:, "enter_long"] = 0

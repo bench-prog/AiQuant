@@ -1,15 +1,15 @@
 """
-Train a PyTorch LSTM model for crypto direction prediction.
+训练 PyTorch LSTM 方向预测模型。
 
-Uses a strict temporal train/test split to avoid look-ahead bias:
-  Training: 2022-01-01 ~ 2023-12-31
-  Test (for Freqtrade backtest): 2024-01-01 ~ 2024-12-31
+采用严格的时间切分避免前瞻偏差:
+  训练集: 2022-01-01 ~ 2023-12-31
+  测试集 (仅用于 Freqtrade 回测评估): 2024-01-01 ~ 2024-12-31
 
-Output:
+输出:
   ../freqtrade/user_data/models/pytorch_model.pt
   ../freqtrade/user_data/models/feature_config.json
 
-Usage:
+用法:
   cd research
   pip install -r requirements.txt
   python train_sequence.py
@@ -61,7 +61,7 @@ DROPOUT = 0.2
 
 
 def load_data():
-    """Load crypto OHLCV data from Binance via ccxt."""
+    """通过 ccxt 从 Binance 加载加密货币 OHLCV 数据。"""
     df = fetch_ohlcv_ccxt(
         symbol="BTC/USDT",
         timeframe="1h",
@@ -75,8 +75,8 @@ def load_data():
 
 def merge_external_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Merge funding rate and open interest data into the OHLCV dataframe.
-    Delegates to the unified data service layer.
+    将资金费率和持仓量数据合并进 OHLCV DataFrame。
+    委托给统一数据服务层处理。
     """
     df = df.copy()
 
@@ -100,6 +100,8 @@ def merge_external_data(df: pd.DataFrame) -> pd.DataFrame:
 
 
 class CryptoLSTM(nn.Module):
+    """LSTM 序列模型。架构需与策略中 SimpleLSTM 保持一致。"""
+
     def __init__(self, input_size: int, hidden_size: int = HIDDEN_SIZE, num_layers: int = NUM_LAYERS, dropout: float = DROPOUT):
         super().__init__()
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout)
@@ -120,6 +122,8 @@ class CryptoLSTM(nn.Module):
 
 
 class CryptoDataset(Dataset):
+    """生成 lookback 长度的序列样本。"""
+
     def __init__(self, X: np.ndarray, y: np.ndarray, lookback: int):
         self.X = X
         self.y = y
@@ -144,7 +148,7 @@ def train():
     valid = df[feature_cols + ["target"]].notnull().all(axis=1)
     df = df.loc[valid].copy()
 
-    # STRICT TEMPORAL SPLIT
+    # 严格时间切分
     train_mask = df["date"] < pd.Timestamp(TRAIN_END, tz="UTC")
     df_train = df.loc[train_mask].copy()
     df_test = df.loc[~train_mask].copy()
@@ -162,7 +166,7 @@ def train():
     if X_test is not None:
         X_test = scaler.transform(X_test)
 
-    # Train/val split (time series aware, within TRAIN period)
+    # 训练/验证切分（时序感知，仅在 TRAIN 时间段内）
     split_idx = int(len(X_train) * 0.8)
     X_tr, X_val = X_train[:split_idx], X_train[split_idx:]
     y_tr, y_val = y_train[:split_idx], y_train[split_idx:]
@@ -219,7 +223,7 @@ def train():
 
     logger.info(f"Best val loss: {best_val_loss:.4f}")
 
-    # Test eval
+    # 在预留 TEST 集上评估
     if X_test is not None:
         test_ds = CryptoDataset(X_test, y_test, LOOKBACK)
         test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False)

@@ -1,9 +1,8 @@
 """
-SmallCapRegimeStrategy (v3) — Hyperopt-enabled
+SmallCapRegimeStrategy (v3) — 支持 Hyperopt
 
-Regime Switching Hybrid framework for small-cap crypto trading.
-Hyperopt parameters allow optimization of regime detection thresholds
-and entry conditions.
+小市值加密货币的 Regime Switching Hybrid 框架。
+Hyperopt 参数允许优化 regime 检测阈值和入场条件。
 """
 
 import json

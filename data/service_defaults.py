@@ -1,10 +1,10 @@
 """
-Default data source registrations for AiQuant.
+AiQuant 内置数据源注册文件。
 
-Import this module to register built-in data fetchers:
+import 本模块即自动注册默认数据源:
     import data.service_defaults
 
-Available keys after import:
+注册后可用 key:
     - "funding_rate"  -> fetch_funding_rate
     - "open_interest" -> fetch_open_interest
 """

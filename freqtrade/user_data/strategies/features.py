@@ -1,7 +1,8 @@
 """
-Shared feature engineering for AiQuant.
-Used by both training scripts (via path insertion) and Freqtrade strategy.
-Pure pandas/numpy — no external TA libraries.
+AiQuant 共享特征工程模块。
+
+训练脚本和 Freqtrade 策略共用本模块，确保训练/回测特征一致。
+纯 pandas/numpy 实现，不依赖外部 TA 库。
 """
 
 import numpy as np
@@ -41,36 +42,36 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> 
 
 def adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> tuple[pd.Series, pd.Series, pd.Series]:
     """
-    Average Directional Index (ADX) with +DI and -DI.
+    平均趋向指数 (ADX) 与 +DI / -DI。
 
     Returns:
-        adx: Trend strength (0-100)
-        plus_di: Positive Directional Indicator
-        minus_di: Negative Directional Indicator
+        adx: 趋势强度 (0-100)
+        plus_di: 正向趋向指标
+        minus_di: 负向趋向指标
     """
-    # True Range
+    # 真实波幅 TR
     high_low = high - low
     high_close = (high - close.shift()).abs()
     low_close = (low - close.shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
 
-    # +DM and -DM
+    # +DM 与 -DM
     plus_dm = high.diff()
     minus_dm = -low.diff()
     plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
     minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
 
-    # Smooth TR, +DM, -DM using Wilder's smoothing (RMA)
+    # Wilder 平滑 (RMA)
     alpha = 1.0 / length
     tr_smooth = tr.ewm(alpha=alpha, min_periods=length).mean()
     plus_dm_smooth = plus_dm.ewm(alpha=alpha, min_periods=length).mean()
     minus_dm_smooth = minus_dm.ewm(alpha=alpha, min_periods=length).mean()
 
-    # +DI and -DI
+    # +DI / -DI
     plus_di = 100 * plus_dm_smooth / tr_smooth
     minus_di = 100 * minus_dm_smooth / tr_smooth
 
-    # DX and ADX
+    # DX 与 ADX
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
     adx_series = dx.ewm(alpha=alpha, min_periods=length).mean()
 
@@ -190,10 +191,10 @@ def add_return_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_funding_rate_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add funding rate related features.
+    资金费率相关特征。
 
-    Expects df to contain a 'fundingRate' column (merged from funding rate data).
-    If the column is missing, returns the dataframe unchanged.
+    要求 df 包含 'fundingRate' 列（已通过 funding rate 数据 merge）。
+    若列不存在则原样返回 df，策略仍可正常运行。
     """
     if "fundingRate" not in df.columns:
         return df
@@ -208,16 +209,16 @@ def add_funding_rate_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_open_interest_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add open interest related features.
+    持仓量相关特征。
 
-    Expects df to contain an 'openInterest' column (merged from OI data).
-    If the column is missing, returns the dataframe unchanged.
+    要求 df 包含 'openInterest' 列（已通过 OI 数据 merge）。
+    若列不存在则原样返回 df，策略仍可正常运行。
     """
     if "openInterest" not in df.columns:
         return df
 
     df = df.copy()
-    # Use log scale to handle large absolute values
+    # 对数缩放处理绝对值过大的问题
     df["open_interest"] = np.log1p(df["openInterest"])
     df["oi_ema_12"] = ema(df["open_interest"], 12)
     df["oi_ema_24"] = ema(df["open_interest"], 24)
@@ -225,13 +226,14 @@ def add_open_interest_features(df: pd.DataFrame) -> pd.DataFrame:
     df["oi_change_6h"] = df["open_interest"].diff(6)
     df["oi_change_24h"] = df["open_interest"].diff(24)
 
-    # OI velocity: OI change rate normalized by volume (proxy for intensity of position build-up/liquidation)
+    # OI 速度: OI 变化率除以成交量，反映持仓建立/清算的强度
     volume_safe = df["volume"].replace(0, np.nan)
     df["oi_velocity"] = df["oi_change_1h"] / volume_safe
     return df
 
 
 def build_all_features(df: pd.DataFrame) -> pd.DataFrame:
+    """按顺序构建全部特征。"""
     df = add_trend_features(df)
     df = add_momentum_features(df)
     df = add_volatility_features(df)
@@ -246,5 +248,6 @@ def build_all_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_feature_columns(df: pd.DataFrame) -> list[str]:
+    """从 DataFrame 中剔除基础 OHLCV 列，返回特征列名列表。"""
     base_cols = {"open", "high", "low", "close", "volume", "date"}
     return [c for c in df.columns if c not in base_cols]

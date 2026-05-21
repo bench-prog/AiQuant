@@ -51,6 +51,9 @@ freqtrade/user_data/hyperopt_results/
 # Data cache
 data/cache/
 
+# System docs
+docs/
+
 # Notebooks output
 research/notebooks/*.png
 research/notebooks/*.csv
