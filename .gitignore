@@ -25,6 +25,8 @@ freqtrade/user_data/data/
 freqtrade/user_data/models/*.pkl
 freqtrade/user_data/models/*.pt
 freqtrade/user_data/models/*.pth
+freqtrade/user_data/models/feature_config.json
+freqtrade/user_data/models/drift_baseline.json
 
 # Freqtrade logs
 freqtrade/user_data/logs/

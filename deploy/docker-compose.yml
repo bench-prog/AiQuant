@@ -7,8 +7,11 @@ services:
     volumes:
       # Mount local user_data to container's freqtrade user_data
       - ../freqtrade/user_data:/freqtrade/user_data
-      # Mount config as read-only for safety
+      # Mount configs as read-only for safety
       - ../freqtrade/config_ai_model.json:/freqtrade/config.json:ro
+      - ../freqtrade/config_smallcap.json:/freqtrade/config_smallcap.json:ro
+      # Mount data/ package so strategies can import data.service (needs write for cache)
+      - ../data:/freqtrade/data
     # Freqtrade standard port for REST API / Web UI
     ports:
       - "8080:8080"

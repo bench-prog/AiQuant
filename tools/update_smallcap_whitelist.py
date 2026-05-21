@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Refresh the small-cap trading pair whitelist for the SmallCapMomentumStrategy.
+Refresh the small-cap trading pair whitelist for SmallCap strategies.
 
 Workflow:
     1. Fetch all coin tickers from CoinPaprika (supply, volume, 7d change).

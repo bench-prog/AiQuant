@@ -59,6 +59,54 @@ def _to_perpetual_symbol(symbol: str) -> str:
     return symbol
 
 
+def _init_exchange(exchange_name: str, **options):
+    """Initialize a ccxt exchange with rate limiting enabled."""
+    exchange_class = getattr(ccxt, exchange_name)
+    return exchange_class({"enableRateLimit": True, **options})
+
+
+def _fetch_paginated(fetch_page, since: int, end_ms: int, parse_last_ts, limit: int = 1000):
+    """
+    Generic pagination loop for ccxt fetchers.
+
+    Args:
+        fetch_page: Callable[[int, int], list] — (since, limit) -> batch data.
+        since: Start timestamp in ms.
+        end_ms: End timestamp in ms.
+        parse_last_ts: Callable[[list], int] — Extract last timestamp from batch.
+        limit: Page size.
+
+    Returns:
+        List of all fetched items.
+    """
+    all_data = []
+    while since < end_ms:
+        try:
+            batch = fetch_page(since=since, limit=limit)
+        except ccxt.NetworkError as e:
+            logger.warning(f"Network error: {e}. Retrying in 5s...")
+            time.sleep(5)
+            continue
+        except ccxt.ExchangeError as e:
+            logger.error(f"Exchange error: {e}")
+            raise
+
+        if not batch:
+            logger.info("No more data returned from exchange.")
+            break
+
+        all_data.extend(batch)
+        last_ts = parse_last_ts(batch)
+        since = last_ts + 1
+
+        if last_ts >= end_ms:
+            break
+
+        logger.info(f"Fetched {len(batch)} items. Latest: {pd.to_datetime(last_ts, unit='ms')}")
+
+    return all_data
+
+
 def fetch_ohlcv_ccxt(
     symbol: str = "BTC/USDT",
     timeframe: str = "1h",
@@ -92,45 +140,24 @@ def fetch_ohlcv_ccxt(
         f"between {start_date} and {end_date}..."
     )
 
-    # Initialize exchange with rate limiting
-    exchange_class = getattr(ccxt, exchange_name)
-    exchange = exchange_class({
-        "enableRateLimit": True,
-        "options": {
-            "defaultType": "spot",  # Change to "future" or "swap" for perpetuals
-        },
-    })
+    exchange = _init_exchange(
+        exchange_name,
+        options={"defaultType": "spot"},  # Change to "future" or "swap" for perpetuals
+    )
 
     since = _to_ms(start_date)
     end_ms = _to_ms(end_date)
-    all_ohlcv = []
 
-    while since < end_ms:
-        try:
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=1000)
-        except ccxt.NetworkError as e:
-            logger.warning(f"Network error: {e}. Retrying in 5s...")
-            time.sleep(5)
-            continue
-        except ccxt.ExchangeError as e:
-            logger.error(f"Exchange error: {e}")
-            raise
+    def _fetch_page(since, limit):
+        return exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit)
 
-        if not ohlcv:
-            logger.info("No more data returned from exchange.")
-            break
-
-        all_ohlcv.extend(ohlcv)
-
-        # Update 'since' to the timestamp after the last candle
-        last_ts = ohlcv[-1][0]
-        since = last_ts + 1
-
-        # Stop if we've reached the end date
-        if last_ts >= end_ms:
-            break
-
-        logger.info(f"Fetched {len(ohlcv)} candles. Latest: {pd.to_datetime(last_ts, unit='ms')}")
+    all_ohlcv = _fetch_paginated(
+        _fetch_page,
+        since=since,
+        end_ms=end_ms,
+        parse_last_ts=lambda batch: batch[-1][0],
+        limit=1000,
+    )
 
     if not all_ohlcv:
         raise ValueError("No data fetched. Check symbol, timeframe, and date range.")
@@ -188,8 +215,7 @@ def fetch_funding_rate(
         return pd.read_parquet(cache_file)
 
     logger.info(f"Fetching funding rate for {perp_symbol}...")
-    exchange_class = getattr(ccxt, exchange_name)
-    exchange = exchange_class({"enableRateLimit": True})
+    exchange = _init_exchange(exchange_name)
 
     since = _to_ms(start_date)
     end_ms = _to_ms(end_date)
@@ -268,8 +294,7 @@ def fetch_open_interest(
         return pd.read_parquet(cache_file)
 
     logger.info(f"Fetching open interest for {perp_symbol} ({timeframe})...")
-    exchange_class = getattr(ccxt, exchange_name)
-    exchange = exchange_class({"enableRateLimit": True})
+    exchange = _init_exchange(exchange_name)
 
     since = _to_ms(start_date)
     end_ms = _to_ms(end_date)

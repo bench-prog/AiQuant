@@ -24,9 +24,11 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-_data_dir = Path(__file__).parent.parent / "data"
-sys.path.insert(0, str(_data_dir))
-from data.market_data import fetch_funding_rate, fetch_ohlcv_ccxt, fetch_open_interest
+_project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(_project_root))
+from data.market_data import fetch_ohlcv_ccxt
+from data.service import query, merge_into
+import data.service_defaults  # registers built-in data sources
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
 
@@ -74,61 +76,25 @@ def load_data():
 def merge_external_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     Merge funding rate and open interest data into the OHLCV dataframe.
-    Uses merge_asof for time-alignment without look-ahead bias.
+    Delegates to the unified data service layer.
     """
     df = df.copy()
 
-    # --- Funding Rate (8h intervals) ---
     try:
-        fr_df = fetch_funding_rate(
-            symbol="BTC/USDT",
-            start_date=TRAIN_START,
-            end_date=FULL_END,
-            exchange_name="binance",
-            use_cache=True,
-        )
-        if not fr_df.empty:
-            df = pd.merge_asof(
-                df,
-                fr_df,
-                on="date",
-                direction="backward",
-            )
-            df["fundingRate"] = df["fundingRate"].ffill()
-            logger.info(f"Merged funding rate data ({len(fr_df)} records).")
-        else:
-            logger.warning("No funding rate data returned; proceeding without it.")
+        fr_df = query("funding_rate", "BTC/USDT", since=TRAIN_START, until=FULL_END,
+                      exchange_name="binance", use_cache=True)
+        df = merge_into(df, fr_df, "fundingRate")
+        logger.info(f"Merged funding rate data ({len(fr_df)} records).")
     except Exception as e:
         logger.warning(f"Failed to fetch/merge funding rate: {e}")
 
-    # --- Open Interest (1h snapshots) ---
     try:
-        oi_df = fetch_open_interest(
-            symbol="BTC/USDT",
-            start_date=TRAIN_START,
-            end_date=FULL_END,
-            exchange_name="binance",
-            timeframe="1h",
-            use_cache=True,
-        )
-        if not oi_df.empty:
-            df = pd.merge_asof(
-                df,
-                oi_df,
-                on="date",
-                direction="backward",
-            )
-            df["openInterest"] = df["openInterest"].ffill()
-            logger.info(f"Merged open interest data ({len(oi_df)} records).")
-        else:
-            logger.warning("No open interest data returned; proceeding without it.")
+        oi_df = query("open_interest", "BTC/USDT", since=TRAIN_START, until=FULL_END,
+                      exchange_name="binance", timeframe="1h", use_cache=True)
+        df = merge_into(df, oi_df, "openInterest")
+        logger.info(f"Merged open interest data ({len(oi_df)} records).")
     except Exception as e:
         logger.warning(f"Failed to fetch/merge open interest: {e}")
-
-    # Final safety: any remaining NaNs in external columns -> 0
-    for col in ["fundingRate", "openInterest"]:
-        if col in df.columns:
-            df[col] = df[col].fillna(0)
 
     return df
 

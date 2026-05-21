@@ -20,6 +20,7 @@ AiQuant is a **personal AI-powered cryptocurrency quantitative trading system** 
 | AI/ML | scikit-learn, LightGBM, PyTorch, pandas, numpy |
 | Feature Engineering | **Pure pandas/numpy** (no external TA libraries) |
 | Data Fetching | ccxt (Binance public OHLCV) |
+| External Data Service | Registry-based `data/service.py` |
 | Feature Storage | Parquet in `data/cache/` |
 | Monitoring | Freqtrade Web UI (port 8080), Telegram Bot |
 | Environment | Docker + Docker Compose |
@@ -35,6 +36,8 @@ AiQuant/
 ├── setup.sh                            # Environment initialization script
 ├── data/                               # Data ingestion layer
 │   ├── market_data.py                  # CCXT-based OHLCV / funding rate / OI downloader with caching
+│   ├── service.py                      # **Unified external data service** (registry-based)
+│   ├── service_defaults.py             # Pre-registered default data sources
 │   └── cache/                          # Parquet cache for downloaded market data
 ├── deploy/                             # Deployment configuration
 │   ├── Dockerfile                      # Custom Freqtrade image (+LightGBM, +sklearn)
@@ -46,8 +49,10 @@ AiQuant/
 │       ├── strategies/
 │       │   ├── __init__.py
 │       │   ├── features.py             # **Shared indicators + feature pipelines**
-│       │   ├── strategy_ai_model.py    # AI model strategy (self-contained, with drift monitor)
-│       │   └── strategy_smallcap.py    # Small-cap momentum strategy (self-contained, with filters)
+│       │   ├── strategy_ai_model_v1.py # AI model strategy (drift monitor, scaler, Telegram alerts)
+│       │   ├── strategy_smallcap_v3_regime.py  # Small-cap regime-switching strategy (hyperopt)
+│       │   ├── strategy_smallcap_v2_turtle.py  # Small-cap turtle strategy
+│       │   └── strategy_smallcap_v1_event_driven.py  # Small-cap event-driven strategy
 │       ├── models/                     # Trained AI models (.pkl, .pt) + feature_config.json + drift_baseline.json
 │       ├── data/                       # Historical price data downloaded by Freqtrade
 │       ├── notebooks/                  # Jupyter notebooks for research
@@ -56,7 +61,7 @@ AiQuant/
 │   ├── requirements.txt
 │   ├── alert_cli.py                    # Standalone CLI for drift alerts
 │   ├── train_classifier.py             # LightGBM with strict temporal split + drift baseline export
-│   └── train_sequence.py               # LSTM with temporal split
+│   └── train_sequence.py               # LSTM with temporal split + scaler export
 ├── tools/                              # Operational tools
 │   └── update_smallcap_whitelist.py    # Refresh small-cap trading pair whitelist
 └── .gitignore
@@ -139,10 +144,10 @@ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     backtesting --strategy AIModelStrategy --timerange 20240101-20241231
 ```
 
-**Small-Cap Momentum Strategy** (specify config):
+**Small-Cap Regime Strategy** (specify config):
 ```bash
 docker compose -f deploy/docker-compose.yml run --rm freqtrade \
-    backtesting --config /freqtrade/config_smallcap.json --strategy SmallCapMomentumStrategy --timerange 20240101-20241231
+    backtesting --config /freqtrade/config_smallcap.json --strategy SmallCapRegimeStrategy --timerange 20240101-20241231
 ```
 
 ### 7. Start Paper Trading (Dry Run)
@@ -152,10 +157,10 @@ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
 docker compose -f deploy/docker-compose.yml up -d
 ```
 
-**Small-Cap Momentum Strategy** (override command):
+**Small-Cap Regime Strategy** (override command):
 ```bash
 docker compose -f deploy/docker-compose.yml run --rm freqtrade \
-    trade --config /freqtrade/config_smallcap.json --strategy SmallCapMomentumStrategy
+    trade --config /freqtrade/config_smallcap.json --strategy SmallCapRegimeStrategy
 ```
 
 Access the Web UI at `http://localhost:8080`.
@@ -170,11 +175,11 @@ docker compose -f deploy/docker-compose.yml down
 
 ## How AI Model Integration Works
 
-The strategy `strategy_ai_model.py` demonstrates the integration pattern:
+The strategy `strategy_ai_model_v1.py` demonstrates the integration pattern:
 
 1. **Model Loading:** In `bot_start()`, load the model and `feature_config.json` from `/freqtrade/user_data/models/`
 2. **Feature Building:** In `populate_indicators()`, call `build_all_features()` from the shared `features.py` module — **identical to the training pipeline**
-3. **Inference:** In `_predict_classifier()` / `_predict_sequence_model()`, use the exact feature column list stored in `feature_config.json` to ensure training/backtest consistency
+3. **Inference:** In `_predict_classifier()` / `_predict_sequence_model()`, use the exact feature column list stored in `feature_config.json` to ensure training/backtest consistency. PyTorch models also load and apply `StandardScaler` parameters from the config.
 4. **Signal Mapping:** In `populate_entry_trend()` / `populate_exit_trend()`, convert model probability to `enter_long` / `exit_long`
 
 ### Model File Naming Convention
@@ -182,6 +187,7 @@ The strategy `strategy_ai_model.py` demonstrates the integration pattern:
 - Sklearn models: `freqtrade/user_data/models/sklearn_model.pkl`
 - PyTorch models: `freqtrade/user_data/models/pytorch_model.pt`
 - Feature config: `freqtrade/user_data/models/feature_config.json` (feature list, scaler params, train/test date ranges, etc.)
+- Drift baseline: `freqtrade/user_data/models/drift_baseline.json`
 
 ---
 
@@ -192,11 +198,13 @@ The strategy `strategy_ai_model.py` demonstrates the integration pattern:
 | `freqtrade/config_ai_model.json` | Exchange keys, trading pairs, timeframe, risk limits for AI model strategy | Always edit before first run |
 | `freqtrade/config_smallcap.json` | Exchange keys, pair whitelist, protections for small-cap strategy | When running small-cap strategy |
 | `freqtrade/user_data/strategies/features.py` | **Shared pure-pandas indicators and feature pipelines** | When adding new features — affects both training and backtest |
-| `freqtrade/user_data/strategies/strategy_ai_model.py` | Core strategy + AI inference + inline drift monitor + Telegram alerts | Modify signal thresholds or add filters |
-| `freqtrade/user_data/strategies/strategy_smallcap.py` | Small-cap momentum strategy with inline EMA/RSI filters | When tuning universe criteria or technical filters |
+| `freqtrade/user_data/strategies/strategy_ai_model_v1.py` | Core strategy + AI inference + drift monitor + scaler + Telegram alerts | Modify signal thresholds or add filters |
+| `freqtrade/user_data/strategies/strategy_smallcap_v3_regime.py` | Small-cap regime-switching strategy with hyperopt support | When tuning regime thresholds or filters |
 | `data/market_data.py` | CCXT OHLCV / funding rate / OI downloader with caching | When switching exchanges or timeframes |
+| `data/service.py` | **Unified data service layer** — registry-based external data access | When adding new external data sources |
+| `data/service_defaults.py` | Pre-registers default data sources (funding_rate, open_interest) | When adding new default sources |
 | `research/train_classifier.py` | Train LightGBM + export drift baseline | When tuning hyperparameters or target horizon |
-| `research/train_sequence.py` | Train LSTM with temporal split | For neural network experiments |
+| `research/train_sequence.py` | Train LSTM with temporal split + scaler export | For neural network experiments |
 | `research/alert_cli.py` | Standalone CLI to send/test drift Telegram alerts | Rarely needed |
 | `tools/update_smallcap_whitelist.py` | Refresh small-cap pair whitelist from CoinPaprika | When updating universe criteria or exchange mappings |
 | `deploy/Dockerfile` | Custom image with ML dependencies | When adding new Python packages |
@@ -213,7 +221,7 @@ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
 
 # Hyperparameter optimization
 docker compose -f deploy/docker-compose.yml run --rm freqtrade \
-    hyperopt --strategy AIModelStrategy --spaces buy roi stoploss
+    hyperopt --strategy SmallCapRegimeStrategy --spaces buy roi stoploss
 
 # List available strategies
 docker compose -f deploy/docker-compose.yml run --rm freqtrade list-strategies
@@ -247,7 +255,12 @@ docker compose -f deploy/docker-compose.yml exec freqtrade /bin/bash
 ## Completed
 
 - [x] **Add funding rate and open interest features** — `market_data.py` + `features.py`, 9 new features, graceful fallback when data unavailable
-- [x] **Telegram bot alerts for model drift detection** — Online drift monitor (stability index) in `strategy_ai_model.py`, `alert_cli.py` CLI, drift baseline exported during training
+- [x] **Telegram bot alerts for model drift detection** — Online drift monitor (stability index) in `strategy_ai_model_v1.py`, `alert_cli.py` CLI, drift baseline exported during training
+- [x] **Unified external data service layer** — `data/service.py` with registry-based `query()` interface, used by both training scripts and strategies
+- [x] **LSTM model architecture consistency** — `SimpleLSTM` in strategy matches `CryptoLSTM` in training; dynamic arch loading from `feature_config.json`
+- [x] **StandardScaler support for PyTorch inference** — Training exports scaler params, strategy loads and applies them during sequence model inference
+- [x] **Backtest-compatible BTC market filter** — Lazy-loaded in `populate_indicators()` so regime strategy works in both backtest and live modes
+- [x] **Code deduplication** — `_prepare_features()` shared between classifier and sequence prediction; `_fetch_paginated()` / `_init_exchange()` in `market_data.py`
 
 ## Roadmap Ideas
 

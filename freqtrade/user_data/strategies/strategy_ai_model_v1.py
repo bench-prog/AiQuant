@@ -23,6 +23,28 @@ import numpy as np
 import pandas as pd
 from freqtrade.strategy import IStrategy
 
+# Ensure data/ package is importable both locally and in Docker
+import sys
+from pathlib import Path
+
+_data_dir = None
+for candidate in [
+    Path(__file__).parent.parent.parent.parent / "data",
+    Path("/freqtrade/data"),
+]:
+    if candidate.exists():
+        _data_dir = candidate
+        break
+
+if _data_dir is None:
+    raise ImportError("Could not find data/ directory.")
+
+if str(_data_dir.parent) not in sys.path:
+    sys.path.insert(0, str(_data_dir.parent))
+
+from data.service import query, merge_into
+import data.service_defaults  # registers built-in data sources
+
 # Shared feature engineering (same code used in training)
 from features import build_all_features
 
@@ -108,15 +130,22 @@ try:
     TORCH_AVAILABLE = True
 
     class SimpleLSTM(nn.Module):
-        def __init__(self, input_size: int = 10, hidden_size: int = 32, num_layers: int = 2):
+        def __init__(self, input_size: int, hidden_size: int = 64, num_layers: int = 2, dropout: float = 0.2):
             super().__init__()
-            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True)
-            self.fc = nn.Linear(hidden_size, 1)
+            self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=dropout if num_layers > 1 else 0.0)
+            self.dropout = nn.Dropout(dropout)
+            self.fc1 = nn.Linear(hidden_size, 32)
+            self.relu = nn.ReLU()
+            self.fc2 = nn.Linear(32, 1)
             self.sigmoid = nn.Sigmoid()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             out, _ = self.lstm(x)
-            out = self.fc(out[:, -1, :])
+            out = out[:, -1, :]
+            out = self.dropout(out)
+            out = self.fc1(out)
+            out = self.relu(out)
+            out = self.fc2(out)
             return self.sigmoid(out)
 
 except ImportError:
@@ -170,6 +199,10 @@ class AIModelStrategy(IStrategy):
     prediction_buffer: list = []
     candle_count: int = 0
 
+    # Scaler params loaded from feature_config (for PyTorch sequence model)
+    scaler_mean: Optional[np.ndarray] = None
+    scaler_scale: Optional[np.ndarray] = None
+
     # --- Drift monitor config ------------------------------------------------
     DRIFT_WINDOW_SIZE: int = 500
     DRIFT_CHECK_INTERVAL: int = 100
@@ -194,12 +227,25 @@ class AIModelStrategy(IStrategy):
         # 2. Try PyTorch
         elif PYTORCH_MODEL_PATH.exists() and TORCH_AVAILABLE:
             try:
-                # You should customize input_size to match your feature count
-                self.pytorch_model = SimpleLSTM(input_size=10, hidden_size=32)
+                # Load model architecture from feature_config (must match training)
+                cfg = self.feature_config or {}
+                input_size = cfg.get("input_size", cfg.get("feature_columns", []).__len__())
+                hidden_size = cfg.get("hidden_size", 64)
+                num_layers = cfg.get("num_layers", 2)
+                dropout = cfg.get("dropout", 0.2)
+                self.pytorch_model = SimpleLSTM(
+                    input_size=input_size,
+                    hidden_size=hidden_size,
+                    num_layers=num_layers,
+                    dropout=dropout,
+                )
                 self.pytorch_model.load_state_dict(torch.load(PYTORCH_MODEL_PATH, map_location="cpu"))
                 self.pytorch_model.eval()
                 self.model_type = "pytorch"
-                logger.info(f"[AiQuant] Loaded PyTorch model from {PYTORCH_MODEL_PATH}")
+                logger.info(
+                    f"[AiQuant] Loaded PyTorch model from {PYTORCH_MODEL_PATH} "
+                    f"(input={input_size}, hidden={hidden_size}, layers={num_layers})"
+                )
             except Exception as e:
                 logger.warning(f"[AiQuant] Failed to load PyTorch model: {e}")
 
@@ -207,11 +253,17 @@ class AIModelStrategy(IStrategy):
             self.model_type = "fallback"
             logger.warning("[AiQuant] No AI model found. Using fallback RSI strategy.")
 
-        # 3. Load feature config (optional)
+        # 3. Load feature config (optional) — must happen before model loading for PyTorch arch
         if FEATURE_CONFIG_PATH.exists():
             with open(FEATURE_CONFIG_PATH, "r") as f:
                 self.feature_config = json.load(f)
             logger.info(f"[AiQuant] Loaded feature config: {self.feature_config}")
+
+            # Load scaler parameters if present (from train_sequence.py)
+            if "scaler_mean" in self.feature_config and "scaler_scale" in self.feature_config:
+                self.scaler_mean = np.array(self.feature_config["scaler_mean"], dtype=np.float32)
+                self.scaler_scale = np.array(self.feature_config["scaler_scale"], dtype=np.float32)
+                logger.info("[AiQuant] Loaded StandardScaler params from feature config.")
 
         # 4. Load drift baseline
         self._load_drift_baseline()
@@ -225,13 +277,30 @@ class AIModelStrategy(IStrategy):
         """
         Build all features and run model inference.
         Uses the same features module as training to ensure consistency.
-
-        NOTE: Freqtrade does not natively inject fundingRate/openInterest columns
-        into the strategy dataframe. If these columns are present (e.g. via custom
-        data-provider or dataframe prepopulation), build_all_features will compute
-        the derived features. If they are absent, the feature functions gracefully
-        skip them and the strategy continues to work with the existing features.
         """
+        pair = metadata.get("pair", "")
+        exchange_name = self.config.get("exchange", {}).get("name", "binance")
+
+        # Merge external data (funding rate / open interest) via unified data service
+        if pair and "date" in dataframe.columns:
+            try:
+                since = dataframe["date"].min().strftime("%Y-%m-%d")
+                until = dataframe["date"].max().strftime("%Y-%m-%d")
+                fr_df = query("funding_rate", pair, since=since, until=until,
+                              exchange_name=exchange_name, use_cache=True)
+                dataframe = merge_into(dataframe, fr_df, "fundingRate")
+            except Exception as e:
+                logger.warning(f"[AiQuant] Failed to merge funding rate: {e}")
+
+            try:
+                since = dataframe["date"].min().strftime("%Y-%m-%d")
+                until = dataframe["date"].max().strftime("%Y-%m-%d")
+                oi_df = query("open_interest", pair, since=since, until=until,
+                              exchange_name=exchange_name, use_cache=True)
+                dataframe = merge_into(dataframe, oi_df, "openInterest")
+            except Exception as e:
+                logger.warning(f"[AiQuant] Failed to merge open interest: {e}")
+
         # Build all features (identical to training pipeline)
         dataframe = build_all_features(dataframe)
 
@@ -250,29 +319,33 @@ class AIModelStrategy(IStrategy):
 
         return dataframe
 
-    def _predict_classifier(self, dataframe: pd.DataFrame) -> pd.DataFrame:
-        """Run sklearn model inference on the dataframe."""
-        # Use exact feature list from training config; fill missing columns with 0
-        # (fundingRate/openInterest may be absent in Freqtrade's default dataframe)
+    def _prepare_features(self, dataframe: pd.DataFrame) -> tuple[list[str], pd.Series, pd.DataFrame]:
+        """Resolve feature columns, fill missing with 0, and return valid rows.
+
+        Returns:
+            (feature_cols, valid_idx, df_valid)
+        """
         feature_cols = self.feature_config.get("feature_columns", []) if self.feature_config else []
         if not feature_cols:
             logger.warning("[AiQuant] No feature_columns in config. Using all non-OHLCV columns.")
             feature_cols = [c for c in dataframe.columns if c not in {"open", "high", "low", "close", "volume", "date"}]
 
-        # Ensure all training features exist in dataframe; fill missing with 0
         for col in feature_cols:
             if col not in dataframe.columns:
                 dataframe[col] = 0.0
 
-        # Drop rows with NaN features
         valid_idx = dataframe[feature_cols].notnull().all(axis=1)
+        return feature_cols, valid_idx, dataframe
+
+    def _predict_classifier(self, dataframe: pd.DataFrame) -> pd.DataFrame:
+        """Run sklearn model inference on the dataframe."""
+        feature_cols, valid_idx, dataframe = self._prepare_features(dataframe)
         X = dataframe.loc[valid_idx, feature_cols].values
 
         if len(X) == 0:
             dataframe["ai_prediction"] = 0.5
             return dataframe
 
-        # Predict probability of class 1 (upward move)
         if hasattr(self.sklearn_model, "predict_proba"):
             probs = self.sklearn_model.predict_proba(X)[:, 1]
         else:
@@ -284,16 +357,7 @@ class AIModelStrategy(IStrategy):
 
     def _predict_sequence_model(self, dataframe: pd.DataFrame) -> pd.DataFrame:
         """Run PyTorch model inference on the dataframe."""
-        feature_cols = self.feature_config.get("feature_columns", []) if self.feature_config else []
-        if not feature_cols:
-            feature_cols = [c for c in dataframe.columns if c not in {"open", "high", "low", "close", "volume", "date"}]
-
-        # Ensure all training features exist in dataframe; fill missing with 0
-        for col in feature_cols:
-            if col not in dataframe.columns:
-                dataframe[col] = 0.0
-
-        valid_idx = dataframe[feature_cols].notnull().all(axis=1)
+        feature_cols, valid_idx, dataframe = self._prepare_features(dataframe)
         df_valid = dataframe.loc[valid_idx].copy()
 
         if len(df_valid) == 0:
@@ -301,13 +365,17 @@ class AIModelStrategy(IStrategy):
             return dataframe
 
         lookback = self.feature_config.get("lookback", 20) if self.feature_config else 20
-        predictions = []
 
+        X = df_valid[feature_cols].values.astype(np.float32)
+        if self.scaler_mean is not None and self.scaler_scale is not None:
+            X = (X - self.scaler_mean) / self.scaler_scale
+
+        predictions = []
         for i in range(len(df_valid)):
             if i < lookback:
                 predictions.append(0.5)
                 continue
-            seq = df_valid[feature_cols].iloc[i - lookback:i].values
+            seq = X[i - lookback:i]
             seq_tensor = torch.tensor(seq, dtype=torch.float32).unsqueeze(0)  # (1, seq, feat)
             with torch.no_grad():
                 pred = self.pytorch_model(seq_tensor).item()

@@ -22,6 +22,26 @@ import numpy as np
 import pandas as pd
 from freqtrade.strategy import IStrategy
 
+# Ensure data/ package is importable both locally and in Docker
+import sys
+from pathlib import Path
+_data_dir = None
+for candidate in [
+    Path(__file__).parent.parent.parent.parent / "data",
+    Path("/freqtrade/data"),
+]:
+    if candidate.exists():
+        _data_dir = candidate
+        break
+
+if _data_dir is None:
+    raise ImportError("Could not find data/ directory.")
+
+if str(_data_dir.parent) not in sys.path:
+    sys.path.insert(0, str(_data_dir.parent))
+
+from data.service import query, merge_into
+import data.service_defaults  # registers built-in data sources
 from features import atr
 
 logger = logging.getLogger(__name__)
@@ -108,6 +128,27 @@ class SmallCapEventDrivenStrategy(IStrategy):
     # ------------------------------------------------------------------
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         pair = metadata.get("pair", "")
+        exchange_name = self.config.get("exchange", {}).get("name", "binance")
+
+        # Merge external data (funding rate / open interest) via unified data service
+        if pair and "date" in dataframe.columns:
+            try:
+                since = dataframe["date"].min().strftime("%Y-%m-%d")
+                until = dataframe["date"].max().strftime("%Y-%m-%d")
+                fr_df = query("funding_rate", pair, since=since, until=until,
+                              exchange_name=exchange_name, use_cache=True)
+                dataframe = merge_into(dataframe, fr_df, "fundingRate")
+            except Exception as e:
+                logger.warning(f"[SmallCapV1] Failed to merge funding rate: {e}")
+
+            try:
+                since = dataframe["date"].min().strftime("%Y-%m-%d")
+                until = dataframe["date"].max().strftime("%Y-%m-%d")
+                oi_df = query("open_interest", pair, since=since, until=until,
+                              exchange_name=exchange_name, use_cache=True)
+                dataframe = merge_into(dataframe, oi_df, "openInterest")
+            except Exception as e:
+                logger.warning(f"[SmallCapV1] Failed to merge open interest: {e}")
 
         # Inject supply from universe
         if pair in self.universe_data:
