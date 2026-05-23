@@ -180,17 +180,17 @@ class AIModelStrategy(IStrategy):
 
     # --- 策略元数据 ---
     timeframe = "1h"
-    stoploss = -0.10
+    stoploss = -0.07          # 更紧止损，控制单笔亏损
     trailing_stop = True
-    trailing_stop_positive = 0.02
-    trailing_stop_positive_offset = 0.03
+    trailing_stop_positive = 0.015   # 回调 1.5% 止盈
+    trailing_stop_positive_offset = 0.025
     trailing_only_offset_is_reached = True
 
+    # 更快锁定利润，减少持仓时间暴露
     minimal_roi = {
-        "0": 0.15,
-        "30": 0.10,
-        "60": 0.05,
-        "120": 0.02
+        "0": 0.06,    # 立即：6%
+        "30": 0.04,   # 30 分钟：4%
+        "60": 0.02,   # 60 分钟：2%
     }
 
     # --- 多币种模型状态 ---
@@ -587,11 +587,15 @@ class AIModelStrategy(IStrategy):
         # AI model signal
         ai_long = dataframe["ai_prediction"] > ENTRY_THRESHOLD
 
-        # Optional: add confirmation filters
-        # e.g., only enter if RSI is not extremely overbought
+        # 趋势过滤：只在 ADX > 20 时交易，避开震荡市
+        adx_col = "adx_14"
+        has_adx = adx_col in dataframe.columns
+        adx_trend = dataframe[adx_col] > 20 if has_adx else pd.Series(True, index=dataframe.index)
+
+        # RSI 过滤：不追高
         not_overbought = dataframe["rsi_14"] < 75
 
-        dataframe.loc[ai_long & not_overbought, "enter_long"] = 1
+        dataframe.loc[ai_long & adx_trend & not_overbought, "enter_long"] = 1
         return dataframe
 
     def populate_exit_trend(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
