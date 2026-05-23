@@ -28,10 +28,12 @@ from features import (
     ema,
     get_feature_columns,
     macd,
+    mom,
     obv,
     rsi,
     stoch,
     vwap,
+    williams_r,
 )
 
 
@@ -153,6 +155,30 @@ class TestStoch:
         assert d.max() <= 100
 
 
+class TestWilliamsR:
+    def test_range(self, sample_ohlcv: pd.DataFrame) -> None:
+        """Williams %R 必须在 [-100, 0] 范围内。"""
+        result = williams_r(sample_ohlcv["high"], sample_ohlcv["low"], sample_ohlcv["close"])
+        assert result.min() >= -100
+        assert result.max() <= 0
+
+    def test_is_series(self, sample_ohlcv: pd.DataFrame) -> None:
+        result = williams_r(sample_ohlcv["high"], sample_ohlcv["low"], sample_ohlcv["close"])
+        assert isinstance(result, pd.Series)
+
+
+class TestMOM:
+    def test_is_series(self, sample_ohlcv: pd.DataFrame) -> None:
+        result = mom(sample_ohlcv["close"])
+        assert isinstance(result, pd.Series)
+
+    def test_length(self, sample_ohlcv: pd.DataFrame) -> None:
+        """不同 length 产生不同动量值。"""
+        mom5 = mom(sample_ohlcv["close"], 5)
+        mom20 = mom(sample_ohlcv["close"], 20)
+        assert mom5.std() != mom20.std()
+
+
 class TestCCI:
     def test_cci_is_series(self, sample_ohlcv: pd.DataFrame) -> None:
         result = cci(sample_ohlcv["high"], sample_ohlcv["low"], sample_ohlcv["close"])
@@ -216,6 +242,13 @@ class TestAddMomentumFeatures:
         assert "stoch_k" in df.columns
         assert "stoch_d" in df.columns
         assert "cci_20" in df.columns
+        assert "williams_r_14" in df.columns
+        assert "mom_10" in df.columns
+
+    def test_williams_r_range(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_momentum_features(sample_ohlcv)
+        assert df["williams_r_14"].min() >= -100
+        assert df["williams_r_14"].max() <= 0
 
 
 class TestAddVolatilityFeatures:

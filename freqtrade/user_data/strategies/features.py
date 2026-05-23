@@ -101,6 +101,18 @@ def cci(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 20) -> 
     return (tp - sma_tp) / (0.015 * mean_dev)
 
 
+def williams_r(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
+    """Williams %R — 与 Stochastic 类似但刻度为 [-100, 0]。"""
+    highest_high = high.rolling(window=length).max()
+    lowest_low = low.rolling(window=length).min()
+    return -100 * (highest_high - close) / (highest_high - lowest_low)
+
+
+def mom(series: pd.Series, length: int = 10) -> pd.Series:
+    """价格动量 — 当前价格与 N 周期前价格的差值。"""
+    return series - series.shift(length)
+
+
 def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     return (np.sign(close.diff()) * volume).cumsum()
 
@@ -134,6 +146,8 @@ def add_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
     df["stoch_k"] = stoch_k
     df["stoch_d"] = stoch_d
     df["cci_20"] = cci(df["high"], df["low"], df["close"], 20)
+    df["williams_r_14"] = williams_r(df["high"], df["low"], df["close"], 14)
+    df["mom_10"] = mom(df["close"], 10)
     return df
 
 
