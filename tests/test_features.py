@@ -7,7 +7,6 @@ AiQuant features.py 单元测试。
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from features import (
     add_candle_features,
