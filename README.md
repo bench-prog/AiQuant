@@ -19,6 +19,10 @@ pip install -r requirements.txt
 python train_classifier.py     # LightGBM 分类器
 python train_sequence.py       # 或 LSTM
 
+# 或使用 Makefile 快捷命令
+make train-classifier          # 训练 LightGBM
+make train-lstm                # 训练 LSTM
+
 # 4. 下载 Freqtrade 回测数据
 docker compose -f deploy/docker-compose.yml run --rm freqtrade \
     download-data --pairs BTC/USDT ETH/USDT --timeframe 1h --timerange 20240101-20241231
@@ -48,6 +52,7 @@ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
   - `user_data/strategies/strategy_smallcap_v3_regime.py` - 小市值动量策略（regime switching + hyperopt）
   - `user_data/strategies/strategy_smallcap_v2_turtle.py` - 海龟策略版本
   - `user_data/strategies/strategy_smallcap_v1_event_driven.py` - 事件驱动版本
+  - `user_data/strategies/strategy_gold_pulse_v1.py` - 黄金脉冲传导策略
 - `data/` - 数据采集与缓存（OHLCV、资金费率、持仓量）
   - `market_data.py` - CCXT 数据下载器
   - `service.py` - **统一数据服务层**（registry-based，训练/策略共用）
@@ -55,11 +60,18 @@ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
 - `research/` - AI 模型训练脚本
   - `train_classifier.py` - LightGBM 分类器训练
   - `train_sequence.py` - LSTM 序列模型训练
+  - `training_config.py` - **公共训练配置**（Symbol、时间范围等）
+  - `data_utils.py` - **公共数据工具**（加载 + 外部数据合并）
   - `alert_cli.py` - 漂移告警 CLI
+- `tests/` - 单元测试与集成测试
+  - `test_features.py` - features.py 全覆盖测试（39 个用例）
 - `tools/` - 业务运维工具
   - `update_smallcap_whitelist.py` - 刷新小市值交易对白名单
 - `deploy/` - Docker 部署配置
+- `code_copilot/` - AI 编码协作框架（Spec 驱动开发规范）
 - `setup.sh` - 环境初始化脚本
+- `Makefile` - 常用命令快捷方式
+- `pytest.ini` - 测试配置
 
 ## 核心设计
 
@@ -69,6 +81,20 @@ docker compose -f deploy/docker-compose.yml run --rm freqtrade \
 - **统一数据服务层**：`data/service.py` 通过 registry 管理外部数据（资金费率、持仓量等），训练和策略共用同一接口
 - **合约特征增强**：已集成资金费率（funding rate）和持仓量（open interest）特征
 - **模型漂移监控**：在线稳定性指数检测 + Telegram 告警，实时发现模型失效
+
+## 开发
+
+```bash
+# 运行测试
+make test
+
+# 训练模型
+make train-classifier   # LightGBM
+make train-lstm         # PyTorch LSTM
+
+# 代码检查
+make lint
+```
 
 ## 安全提示
 
