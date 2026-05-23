@@ -24,7 +24,6 @@ from freqtrade.strategy import IStrategy
 
 # Ensure data/ package is importable both locally and in Docker
 import sys
-from pathlib import Path
 
 _data_dir = None
 for candidate in [
@@ -41,11 +40,11 @@ if _data_dir is None:
 if str(_data_dir.parent) not in sys.path:
     sys.path.insert(0, str(_data_dir.parent))
 
-from data.service import query, merge_into
-import data.service_defaults  # registers built-in data sources
+from data.service import query, merge_into  # noqa: E402
+import data.service_defaults  # noqa: E402,F401  # registers built-in data sources
 
 # Shared feature engineering (same code used in training)
-from features import build_all_features
+from features import build_all_features  # noqa: E402
 
 # Drift detection utilities (pure numpy/pandas, no external deps)
 # Drift detection utilities (inline to keep strategy self-contained)
@@ -194,7 +193,12 @@ class AIModelStrategy(IStrategy):
         "120": 0.02
     }
 
-    # --- 模型状态 ---
+    # --- 多币种模型状态 ---
+    # 按 pair 存储模型信息，支持 BTC/USDT、ETH/USDT、SOL/USDT 等
+    _pair_models: dict = {}
+    _current_active_pair: str = ""
+
+    # 兼容旧版：单币种策略时直接使用以下属性
     sklearn_model: Optional[object] = None
     pytorch_model: Optional[nn.Module] = None
     feature_config: Optional[dict] = None
@@ -216,67 +220,184 @@ class AIModelStrategy(IStrategy):
     # Bot 生命周期钩子
     # ------------------------------------------------------------------
     def bot_start(self, **kwargs) -> None:
-        """Bot 启动时一次性加载 AI 模型。"""
-        logger.info("[AiQuant] Loading AI model...")
+        """Bot 启动时一次性加载所有币种的 AI 模型。"""
+        logger.info("[AiQuant] Loading AI models for all pairs...")
+        self._pair_models = {}
+        self._current_active_pair = ""
+        self._load_all_pair_models()
 
-        # 1. 尝试加载 sklearn 模型
-        if SKLEARN_MODEL_PATH.exists():
+        if not self._pair_models:
+            logger.warning("[AiQuant] No pair models found. Trying legacy single-model layout.")
+            self._load_legacy_model()
+
+        loaded = [f"{p}({i['type']})" for p, i in self._pair_models.items()]
+        logger.info(f"[AiQuant] Loaded models for {len(self._pair_models)} pair(s): {', '.join(loaded)}")
+
+    def _load_all_pair_models(self) -> None:
+        """扫描 models/ 下所有子目录，按 pair 加载模型。"""
+        if not MODEL_DIR.exists():
+            return
+
+        for pair_dir in sorted(MODEL_DIR.iterdir()):
+            if not pair_dir.is_dir():
+                continue
+            pair = pair_dir.name.replace("_", "/")
+            self._load_pair_model(pair, pair_dir)
+
+    def _load_pair_model(self, pair: str, pair_dir: Path) -> None:
+        """加载单个 pair 的模型、配置和漂移基线。"""
+        info: dict = {"type": "fallback", "pair": pair}
+
+        # 1. sklearn
+        sklearn_path = pair_dir / "sklearn_model.pkl"
+        if sklearn_path.exists():
             try:
-                self.sklearn_model = joblib.load(SKLEARN_MODEL_PATH)
-                self.model_type = "sklearn"
-                logger.info(f"[AiQuant] Loaded sklearn model from {SKLEARN_MODEL_PATH}")
+                info["sklearn_model"] = joblib.load(sklearn_path)
+                info["type"] = "sklearn"
             except Exception as e:
-                logger.warning(f"[AiQuant] Failed to load sklearn model: {e}")
+                logger.warning(f"[AiQuant] Failed to load sklearn for {pair}: {e}")
 
-        # 2. Try PyTorch
-        elif PYTORCH_MODEL_PATH.exists() and TORCH_AVAILABLE:
+        # 2. PyTorch（仅当 sklearn 未加载时）
+        pytorch_path = pair_dir / "pytorch_model.pt"
+        if pytorch_path.exists() and TORCH_AVAILABLE and info["type"] == "fallback":
             try:
-                # Load model architecture from feature_config (must match training)
-                cfg = self.feature_config or {}
-                input_size = cfg.get("input_size", cfg.get("feature_columns", []).__len__())
+                cfg = self._load_feature_config_from_dir(pair_dir)
+                input_size = cfg.get("input_size", len(cfg.get("feature_columns", [])))
                 hidden_size = cfg.get("hidden_size", 64)
                 num_layers = cfg.get("num_layers", 2)
                 dropout = cfg.get("dropout", 0.2)
-                self.pytorch_model = SimpleLSTM(
+                info["pytorch_model"] = SimpleLSTM(
                     input_size=input_size,
                     hidden_size=hidden_size,
                     num_layers=num_layers,
                     dropout=dropout,
                 )
-                self.pytorch_model.load_state_dict(torch.load(PYTORCH_MODEL_PATH, map_location="cpu"))
-                self.pytorch_model.eval()
-                self.model_type = "pytorch"
-                logger.info(
-                    f"[AiQuant] Loaded PyTorch model from {PYTORCH_MODEL_PATH} "
-                    f"(input={input_size}, hidden={hidden_size}, layers={num_layers})"
+                info["pytorch_model"].load_state_dict(
+                    torch.load(pytorch_path, map_location="cpu")
                 )
+                info["pytorch_model"].eval()
+                info["type"] = "pytorch"
             except Exception as e:
-                logger.warning(f"[AiQuant] Failed to load PyTorch model: {e}")
+                logger.warning(f"[AiQuant] Failed to load PyTorch for {pair}: {e}")
 
-        else:
-            self.model_type = "fallback"
-            logger.warning("[AiQuant] No AI model found. Using fallback RSI strategy.")
+        # 3. feature_config
+        cfg = self._load_feature_config_from_dir(pair_dir)
+        if cfg:
+            info["feature_config"] = cfg
+            if "scaler_mean" in cfg and "scaler_scale" in cfg:
+                info["scaler_mean"] = np.array(cfg["scaler_mean"], dtype=np.float32)
+                info["scaler_scale"] = np.array(cfg["scaler_scale"], dtype=np.float32)
 
-        # 3. Load feature config (optional) — must happen before model loading for PyTorch arch
-        for cfg_path in FEATURE_CONFIG_PATHS:
+        # 4. drift baseline
+        baseline = self._load_drift_baseline_from_dir(pair_dir)
+        if baseline:
+            info["drift_baseline"] = baseline
+
+        info["prediction_buffer"] = []
+        info["candle_count"] = 0
+        self._pair_models[pair] = info
+
+    def _load_legacy_model(self) -> None:
+        """向后兼容：加载根目录下的旧模型文件（单币种模式）。"""
+        pair = "BTC/USDT"
+        info: dict = {"type": "fallback", "pair": pair}
+
+        if SKLEARN_MODEL_PATH.exists():
+            try:
+                info["sklearn_model"] = joblib.load(SKLEARN_MODEL_PATH)
+                info["type"] = "sklearn"
+            except Exception as e:
+                logger.warning(f"[AiQuant] Failed to load legacy sklearn: {e}")
+        elif PYTORCH_MODEL_PATH.exists() and TORCH_AVAILABLE:
+            try:
+                cfg = self._load_feature_config_from_dir(MODEL_DIR)
+                input_size = cfg.get("input_size", len(cfg.get("feature_columns", [])))
+                hidden_size = cfg.get("hidden_size", 64)
+                num_layers = cfg.get("num_layers", 2)
+                dropout = cfg.get("dropout", 0.2)
+                info["pytorch_model"] = SimpleLSTM(
+                    input_size=input_size,
+                    hidden_size=hidden_size,
+                    num_layers=num_layers,
+                    dropout=dropout,
+                )
+                info["pytorch_model"].load_state_dict(
+                    torch.load(PYTORCH_MODEL_PATH, map_location="cpu")
+                )
+                info["pytorch_model"].eval()
+                info["type"] = "pytorch"
+            except Exception as e:
+                logger.warning(f"[AiQuant] Failed to load legacy PyTorch: {e}")
+
+        cfg = self._load_feature_config_from_dir(MODEL_DIR)
+        if cfg:
+            info["feature_config"] = cfg
+            if "scaler_mean" in cfg and "scaler_scale" in cfg:
+                info["scaler_mean"] = np.array(cfg["scaler_mean"], dtype=np.float32)
+                info["scaler_scale"] = np.array(cfg["scaler_scale"], dtype=np.float32)
+
+        baseline = self._load_drift_baseline_from_dir(MODEL_DIR)
+        if baseline:
+            info["drift_baseline"] = baseline
+
+        info["prediction_buffer"] = []
+        info["candle_count"] = 0
+        self._pair_models[pair] = info
+
+    @staticmethod
+    def _load_feature_config_from_dir(pair_dir: Path) -> dict:
+        """从 pair 目录加载 feature_config。"""
+        cfg_paths = [
+            pair_dir / "feature_config.json",
+            pair_dir / "feature_config_lstm.json",
+            pair_dir / "feature_config_lightgbm.json",
+        ]
+        for cfg_path in cfg_paths:
             if cfg_path.exists():
                 with open(cfg_path, "r") as f:
-                    self.feature_config = json.load(f)
-                logger.info(f"[AiQuant] Loaded feature config from {cfg_path}")
+                    return json.load(f)
+        return {}
 
-                # Load scaler parameters if present (from train_sequence.py)
-                if "scaler_mean" in self.feature_config and "scaler_scale" in self.feature_config:
-                    self.scaler_mean = np.array(self.feature_config["scaler_mean"], dtype=np.float32)
-                    self.scaler_scale = np.array(self.feature_config["scaler_scale"], dtype=np.float32)
-                    logger.info("[AiQuant] Loaded StandardScaler params from feature config.")
-                break
-        else:
-            logger.warning("[AiQuant] No feature config found.")
+    @staticmethod
+    def _load_drift_baseline_from_dir(pair_dir: Path) -> dict | None:
+        """从 pair 目录加载漂移基线。"""
+        baseline_paths = [
+            pair_dir / "drift_baseline_lstm.json",
+            pair_dir / "drift_baseline.json",
+        ]
+        for bp in baseline_paths:
+            if bp.exists():
+                with open(bp, "r") as f:
+                    return json.load(f)
+        return None
 
-        # 4. Load drift baseline
-        self._load_drift_baseline()
-        self.prediction_buffer = []
-        self.candle_count = 0
+    def _activate_pair(self, pair: str) -> None:
+        """激活指定 pair 的模型状态到 self 属性。"""
+        info = self._pair_models.get(pair, {"type": "fallback"})
+        self.sklearn_model = info.get("sklearn_model")
+        self.pytorch_model = info.get("pytorch_model")
+        self.feature_config = info.get("feature_config")
+        self.model_type = info.get("type", "fallback")
+        self.drift_baseline = info.get("drift_baseline")
+        self.scaler_mean = info.get("scaler_mean")
+        self.scaler_scale = info.get("scaler_scale")
+        self.prediction_buffer = info.get("prediction_buffer", [])
+        self.candle_count = info.get("candle_count", 0)
+
+    def _save_pair(self, pair: str) -> None:
+        """将当前 self 属性保存回 pair 状态。"""
+        if pair not in self._pair_models:
+            return
+        info = self._pair_models[pair]
+        info["sklearn_model"] = self.sklearn_model
+        info["pytorch_model"] = self.pytorch_model
+        info["feature_config"] = self.feature_config
+        info["model_type"] = self.model_type
+        info["drift_baseline"] = self.drift_baseline
+        info["scaler_mean"] = self.scaler_mean
+        info["scaler_scale"] = self.scaler_scale
+        info["prediction_buffer"] = self.prediction_buffer
+        info["candle_count"] = self.candle_count
 
     # ------------------------------------------------------------------
     # 特征工程
@@ -288,6 +409,14 @@ class AIModelStrategy(IStrategy):
         """
         pair = metadata.get("pair", "")
         exchange_name = self.config.get("exchange", {}).get("name", "binance")
+
+        # 1. 保存之前激活的 pair 状态
+        if self._current_active_pair:
+            self._save_pair(self._current_active_pair)
+
+        # 2. 激活当前 pair
+        self._activate_pair(pair)
+        self._current_active_pair = pair
 
         # Merge external data (funding rate / open interest) via unified data service
         if pair and "date" in dataframe.columns:
@@ -324,6 +453,9 @@ class AIModelStrategy(IStrategy):
         # --- Drift monitoring ---
         if self.model_type != "fallback" and self.drift_baseline is not None:
             dataframe = self._update_drift_monitor(dataframe, metadata)
+
+        # 3. 保存当前 pair 状态
+        self._save_pair(pair)
 
         return dataframe
 
@@ -396,21 +528,6 @@ class AIModelStrategy(IStrategy):
     # ------------------------------------------------------------------
     # 漂移监控
     # ------------------------------------------------------------------
-    def _load_drift_baseline(self) -> None:
-        """加载训练时导出的漂移基线。优先尝试 lstm 基线，fallback 到旧名。"""
-        baseline_paths = [
-            MODEL_DIR / "drift_baseline_lstm.json",
-            MODEL_DIR / "drift_baseline.json",
-        ]
-        for baseline_path in baseline_paths:
-            if baseline_path.exists():
-                with open(baseline_path, "r") as f:
-                    self.drift_baseline = json.load(f)
-                logger.info(f"[AiQuant] Loaded drift baseline from {baseline_path}")
-                return
-        self.drift_baseline = None
-        logger.warning("[AiQuant] No drift baseline found. Drift monitoring disabled.")
-
     def _update_drift_monitor(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         """更新预测缓冲区，并周期性检测模型漂移。"""
         latest_pred = dataframe["ai_prediction"].iloc[-1] if dataframe["ai_prediction"].notna().any() else None
