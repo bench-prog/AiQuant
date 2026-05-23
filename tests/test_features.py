@@ -11,6 +11,7 @@ import pandas as pd
 from features import (
     DEFAULT_REGISTRY,
     add_candle_features,
+    load_feature_config,
     add_funding_rate_features,
     add_lag_features,
     add_momentum_features,
@@ -443,3 +444,42 @@ class TestFeatureRegistry:
         df_registry = DEFAULT_REGISTRY.compute(sample_ohlcv_with_funding.copy())
         df_build = build_all_features(sample_ohlcv_with_funding.copy())
         assert set(df_registry.columns) == set(df_build.columns)
+
+
+class TestLoadFeatureConfig:
+    def test_load_none_returns_default(self) -> None:
+        cfg = load_feature_config(None)
+        assert "parameters" in cfg
+        assert "enabled_groups" in cfg
+        assert "ema_lengths" in cfg["parameters"]
+
+    def test_load_dict(self) -> None:
+        custom = {"parameters": {"adx_length": 20}, "enabled_groups": ["trend"]}
+        cfg = load_feature_config(custom)
+        assert cfg["parameters"]["adx_length"] == 20
+
+    def test_load_yaml_default(self) -> None:
+        cfg = load_feature_config("default")
+        assert "parameters" in cfg
+        assert "enabled_groups" in cfg
+        assert cfg["parameters"]["adx_length"] == 14
+
+    def test_load_yaml_minimal(self) -> None:
+        cfg = load_feature_config("minimal")
+        assert "parameters" in cfg
+        # minimal 配置 EMA 只有 12/26
+        assert cfg["parameters"]["ema_lengths"] == [12, 26]
+
+    def test_build_from_yaml(self, sample_ohlcv_with_funding: pd.DataFrame) -> None:
+        df_default = build_all_features(sample_ohlcv_with_funding.copy(), config="default")
+        df_none = build_all_features(sample_ohlcv_with_funding.copy())
+        assert set(df_default.columns) == set(df_none.columns)
+
+    def test_build_minimal_has_fewer_columns(
+        self, sample_ohlcv_with_funding: pd.DataFrame
+    ) -> None:
+        df_minimal = build_all_features(sample_ohlcv_with_funding.copy(), config="minimal")
+        df_default = build_all_features(sample_ohlcv_with_funding.copy(), config="default")
+        # minimal 只有 2 个 EMA，default 有 3 个
+        assert "ema_50" in df_default.columns
+        assert "ema_50" not in df_minimal.columns

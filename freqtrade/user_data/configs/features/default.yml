@@ -1,0 +1,42 @@
+name: default
+description: AiQuant 默认特征集（54 列）
+
+parameters:
+  ema_lengths: [12, 26, 50]
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+  adx_length: 14
+  rsi_lengths: [14, 6]
+  stoch:
+    k: 14
+    d: 3
+  cci_length: 20
+  williams_r_length: 14
+  mom_length: 10
+  atr_length: 14
+  bbands:
+    length: 20
+    std: 2.0
+  volume_sma_length: 20
+  lag_periods: [1, 2, 3, 5, 10]
+  return_windows:
+    short: 6
+    long: 24
+  volatility_window: 12
+  funding_rate_ema_length: 8
+  oi_ema_lengths: [12, 24]
+  oi_change_periods: [1, 6, 24]
+
+enabled_groups:
+  - trend
+  - momentum
+  - volatility
+  - volume
+  - candle
+  - lag
+  - time
+  - return
+  - funding_rate
+  - open_interest

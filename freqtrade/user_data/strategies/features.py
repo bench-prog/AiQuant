@@ -7,6 +7,8 @@ AiQuant 共享特征工程模块。
 
 import numpy as np
 import pandas as pd
+import yaml
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # 默认特征参数配置
@@ -32,6 +34,53 @@ FEATURE_PARAMS = {
     "oi_ema_lengths": [12, 24],
     "oi_change_periods": [1, 6, 24],
 }
+
+# 配置目录：支持本地开发和 Docker 环境
+_CONFIG_DIR = Path(__file__).parent.parent / "configs" / "features"
+
+_DEFAULT_GROUPS = [
+    "trend", "momentum", "volatility", "volume",
+    "candle", "lag", "time", "return",
+    "funding_rate", "open_interest",
+]
+
+
+def load_feature_config(path: str | Path | dict | None = None) -> dict:
+    """加载特征配置。
+
+    Args:
+        path: 配置来源。
+            - None: 返回 FEATURE_PARAMS。
+            - dict: 直接使用。
+            - str/Path: YAML 文件路径（相对路径在 configs/features/ 下查找）。
+
+    Returns:
+        完整配置字典（含 parameters + enabled_groups）。
+    """
+    if path is None:
+        return {"parameters": FEATURE_PARAMS.copy(), "enabled_groups": _DEFAULT_GROUPS.copy()}
+    if isinstance(path, dict):
+        return path.copy()
+
+    p = Path(path)
+    if not p.is_absolute():
+        # 尝试多个候选路径（本地开发 + Docker）
+        candidates = [
+            _CONFIG_DIR / p,
+            _CONFIG_DIR / f"{p}.yml",
+            _CONFIG_DIR / f"{p}.yaml",
+        ]
+        for cand in candidates:
+            if cand.exists():
+                p = cand
+                break
+        else:
+            raise FileNotFoundError(f"Feature config not found: {path}")
+
+    with open(p, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    return config
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
@@ -217,7 +266,7 @@ def add_volume_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
     return df
 
 
-def add_candle_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_candle_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
     df = df.copy()
     # 复用 add_trend_features 已生成的 ema 列，避免重复计算
     ema_12 = df["ema_12"] if "ema_12" in df.columns else ema(df["close"], 12)
@@ -243,7 +292,7 @@ def add_lag_features(df: pd.DataFrame, params: dict = None, lags: list[int] = No
     return df
 
 
-def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_time_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
     df = df.copy()
     df["hour"] = df["date"].dt.hour
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
@@ -307,20 +356,19 @@ def add_open_interest_features(df: pd.DataFrame, params: dict = None) -> pd.Data
     return df
 
 
-def build_all_features(df: pd.DataFrame, config: dict = None) -> pd.DataFrame:
-    """按顺序构建全部特征。"""
-    cfg = config or FEATURE_PARAMS
-    df = add_trend_features(df, cfg)
-    df = add_momentum_features(df, cfg)
-    df = add_volatility_features(df, cfg)
-    df = add_volume_features(df, cfg)
-    df = add_candle_features(df)
-    df = add_lag_features(df, cfg)
-    df = add_time_features(df)
-    df = add_return_features(df, cfg)
-    df = add_funding_rate_features(df, cfg)
-    df = add_open_interest_features(df, cfg)
-    return df
+def build_all_features(df: pd.DataFrame, config: str | Path | dict | None = None) -> pd.DataFrame:
+    """按顺序构建全部特征。
+
+    Args:
+        config: 配置来源。
+            - None: 使用 FEATURE_PARAMS 默认配置。
+            - dict: 直接传入参数字典。
+            - str/Path: YAML 配置文件路径（如 "default"、"minimal"）。
+    """
+    cfg = load_feature_config(config)
+    params = cfg.get("parameters", {})
+    groups = cfg.get("enabled_groups", _DEFAULT_GROUPS)
+    return DEFAULT_REGISTRY.compute(df, feature_names=groups, config=params)
 
 
 def get_feature_columns(df: pd.DataFrame) -> list[str]:
