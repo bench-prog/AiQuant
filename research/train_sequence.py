@@ -7,7 +7,7 @@
 
 输出:
   ../freqtrade/user_data/models/pytorch_model.pt
-  ../freqtrade/user_data/models/feature_config.json
+  ../freqtrade/user_data/models/feature_config_lstm.json
 
 用法:
   cd research
@@ -24,13 +24,27 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-_project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(_project_root))
-from data.market_data import fetch_ohlcv_ccxt
-from data.service import query, merge_into
-import data.service_defaults  # registers built-in data sources
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, Dataset
+
+_project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(_project_root))
+
+from research.training_config import (
+    TRAIN_START,
+    TRAIN_END,
+    FULL_END,
+    LOOKBACK,
+    HORIZON,
+    BATCH_SIZE,
+    EPOCHS,
+    LR,
+    HIDDEN_SIZE,
+    NUM_LAYERS,
+    DROPOUT,
+    MODEL_OUTPUT_DIR,
+)
+from research.data_utils import load_training_data, merge_external_data
 
 # Import shared feature engineering from strategies directory
 _strategies_dir = Path(__file__).parent.parent / "freqtrade" / "user_data" / "strategies"
@@ -39,64 +53,6 @@ from features import build_all_features, get_feature_columns  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-MODEL_OUTPUT_DIR = Path(__file__).parent.parent / "freqtrade" / "user_data" / "models"
-MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-TRAIN_START = "2022-01-01"
-TRAIN_END = "2023-12-31"
-FULL_END = "2024-12-31"
-
-LOOKBACK = 20
-HORIZON = 1
-BATCH_SIZE = 64
-EPOCHS = 30
-LR = 1e-3
-HIDDEN_SIZE = 64
-NUM_LAYERS = 2
-DROPOUT = 0.2
-
-
-def load_data():
-    """通过 ccxt 从 Binance 加载加密货币 OHLCV 数据。"""
-    df = fetch_ohlcv_ccxt(
-        symbol="BTC/USDT",
-        timeframe="1h",
-        start_date=TRAIN_START,
-        end_date=FULL_END,
-        exchange_name="binance",
-        use_cache=True,
-    )
-    return df
-
-
-def merge_external_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    将资金费率和持仓量数据合并进 OHLCV DataFrame。
-    委托给统一数据服务层处理。
-    """
-    df = df.copy()
-
-    try:
-        fr_df = query("funding_rate", "BTC/USDT", since=TRAIN_START, until=FULL_END,
-                      exchange_name="binance", use_cache=True)
-        df = merge_into(df, fr_df, "fundingRate")
-        logger.info(f"Merged funding rate data ({len(fr_df)} records).")
-    except Exception as e:
-        logger.warning(f"Failed to fetch/merge funding rate: {e}")
-
-    try:
-        oi_df = query("open_interest", "BTC/USDT", since=TRAIN_START, until=FULL_END,
-                      exchange_name="binance", timeframe="1h", use_cache=True)
-        df = merge_into(df, oi_df, "openInterest")
-        logger.info(f"Merged open interest data ({len(oi_df)} records).")
-    except Exception as e:
-        logger.warning(f"Failed to fetch/merge open interest: {e}")
-
-    return df
 
 
 class CryptoLSTM(nn.Module):
@@ -139,7 +95,7 @@ class CryptoDataset(Dataset):
 
 
 def train():
-    df = load_data()
+    df = load_training_data()
     df = merge_external_data(df)
     df = build_all_features(df)
     df["target"] = (df["close"].shift(-HORIZON) > df["close"]).astype(float)
@@ -173,7 +129,7 @@ def train():
 
     train_ds = CryptoDataset(X_tr, y_tr, LOOKBACK)
     val_ds = CryptoDataset(X_val, y_val, LOOKBACK)
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=False)
     val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -223,6 +179,36 @@ def train():
 
     logger.info(f"Best val loss: {best_val_loss:.4f}")
 
+    # 从训练集预测分布导出漂移监控基线
+    train_ds_full = CryptoDataset(X_train, y_train, LOOKBACK)
+    train_loader_full = DataLoader(train_ds_full, batch_size=BATCH_SIZE, shuffle=False)
+    train_preds = []
+    model.eval()
+    with torch.no_grad():
+        for xb, _ in train_loader_full:
+            xb = xb.to(device)
+            pred = model(xb).squeeze()
+            train_preds.extend(pred.cpu().numpy())
+    train_pred = np.array(train_preds)
+    baseline = {
+        "mean": float(train_pred.mean()),
+        "std": float(train_pred.std()),
+        "quantiles": {
+            str(q): float(v) for q, v in zip(
+                [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95],
+                np.quantile(train_pred, [0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95])
+            )
+        },
+        "hist_counts": np.histogram(train_pred, bins=20, range=(0, 1))[0].tolist(),
+        "hist_bins": 20,
+        "hist_range": [0, 1],
+        "n_samples": len(train_pred),
+    }
+    baseline_path = MODEL_OUTPUT_DIR / "drift_baseline_lstm.json"
+    with open(baseline_path, "w") as f:
+        json.dump(baseline, f, indent=2)
+    logger.info(f"Drift baseline saved to {baseline_path}")
+
     # 在预留 TEST 集上评估
     if X_test is not None:
         test_ds = CryptoDataset(X_test, y_test, LOOKBACK)
@@ -251,7 +237,7 @@ def train():
         "scaler_mean": scaler.mean_.tolist(),
         "scaler_scale": scaler.scale_.tolist(),
     }
-    with open(MODEL_OUTPUT_DIR / "feature_config.json", "w") as f:
+    with open(MODEL_OUTPUT_DIR / "feature_config_lstm.json", "w") as f:
         json.dump(config, f, indent=2)
 
     logger.info("PyTorch model training complete.")

@@ -162,7 +162,11 @@ logger = logging.getLogger(__name__)
 MODEL_DIR = Path("/freqtrade/user_data/models")
 SKLEARN_MODEL_PATH = MODEL_DIR / "sklearn_model.pkl"
 PYTORCH_MODEL_PATH = MODEL_DIR / "pytorch_model.pt"
-FEATURE_CONFIG_PATH = MODEL_DIR / "feature_config.json"
+FEATURE_CONFIG_PATHS = [
+    MODEL_DIR / "feature_config_lstm.json",
+    MODEL_DIR / "feature_config_lightgbm.json",
+    MODEL_DIR / "feature_config.json",  # fallback for legacy
+]
 
 # Signal thresholds
 ENTRY_THRESHOLD = 0.6   # Model probability > 0.6 -> enter long
@@ -254,16 +258,20 @@ class AIModelStrategy(IStrategy):
             logger.warning("[AiQuant] No AI model found. Using fallback RSI strategy.")
 
         # 3. Load feature config (optional) — must happen before model loading for PyTorch arch
-        if FEATURE_CONFIG_PATH.exists():
-            with open(FEATURE_CONFIG_PATH, "r") as f:
-                self.feature_config = json.load(f)
-            logger.info(f"[AiQuant] Loaded feature config: {self.feature_config}")
+        for cfg_path in FEATURE_CONFIG_PATHS:
+            if cfg_path.exists():
+                with open(cfg_path, "r") as f:
+                    self.feature_config = json.load(f)
+                logger.info(f"[AiQuant] Loaded feature config from {cfg_path}")
 
-            # Load scaler parameters if present (from train_sequence.py)
-            if "scaler_mean" in self.feature_config and "scaler_scale" in self.feature_config:
-                self.scaler_mean = np.array(self.feature_config["scaler_mean"], dtype=np.float32)
-                self.scaler_scale = np.array(self.feature_config["scaler_scale"], dtype=np.float32)
-                logger.info("[AiQuant] Loaded StandardScaler params from feature config.")
+                # Load scaler parameters if present (from train_sequence.py)
+                if "scaler_mean" in self.feature_config and "scaler_scale" in self.feature_config:
+                    self.scaler_mean = np.array(self.feature_config["scaler_mean"], dtype=np.float32)
+                    self.scaler_scale = np.array(self.feature_config["scaler_scale"], dtype=np.float32)
+                    logger.info("[AiQuant] Loaded StandardScaler params from feature config.")
+                break
+        else:
+            logger.warning("[AiQuant] No feature config found.")
 
         # 4. Load drift baseline
         self._load_drift_baseline()
@@ -389,15 +397,19 @@ class AIModelStrategy(IStrategy):
     # 漂移监控
     # ------------------------------------------------------------------
     def _load_drift_baseline(self) -> None:
-        """加载训练时导出的漂移基线。"""
-        baseline_path = MODEL_DIR / "drift_baseline.json"
-        if baseline_path.exists():
-            with open(baseline_path, "r") as f:
-                self.drift_baseline = json.load(f)
-            logger.info(f"[AiQuant] Loaded drift baseline from {baseline_path}")
-        else:
-            self.drift_baseline = None
-            logger.warning("[AiQuant] No drift_baseline.json found. Drift monitoring disabled.")
+        """加载训练时导出的漂移基线。优先尝试 lstm 基线，fallback 到旧名。"""
+        baseline_paths = [
+            MODEL_DIR / "drift_baseline_lstm.json",
+            MODEL_DIR / "drift_baseline.json",
+        ]
+        for baseline_path in baseline_paths:
+            if baseline_path.exists():
+                with open(baseline_path, "r") as f:
+                    self.drift_baseline = json.load(f)
+                logger.info(f"[AiQuant] Loaded drift baseline from {baseline_path}")
+                return
+        self.drift_baseline = None
+        logger.warning("[AiQuant] No drift baseline found. Drift monitoring disabled.")
 
     def _update_drift_monitor(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         """更新预测缓冲区，并周期性检测模型漂移。"""
