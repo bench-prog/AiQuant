@@ -23,7 +23,7 @@ def rsi(series: pd.Series, length: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[pd.Series, pd.Series, pd.Series]:
     ema_fast = ema(series, fast)
     ema_slow = ema(series, slow)
     macd_line = ema_fast - ema_slow
@@ -78,7 +78,7 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> 
     return adx_series, plus_di, minus_di
 
 
-def bbands(series: pd.Series, length: int = 20, std: float = 2.0):
+def bbands(series: pd.Series, length: int = 20, std: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:
     middle = series.rolling(window=length).mean()
     sigma = series.rolling(window=length).std()
     upper = middle + std * sigma
@@ -86,7 +86,7 @@ def bbands(series: pd.Series, length: int = 20, std: float = 2.0):
     return lower, middle, upper
 
 
-def stoch(high: pd.Series, low: pd.Series, close: pd.Series, k: int = 14, d: int = 3):
+def stoch(high: pd.Series, low: pd.Series, close: pd.Series, k: int = 14, d: int = 3) -> tuple[pd.Series, pd.Series]:
     lowest_low = low.rolling(window=k).min()
     highest_high = high.rolling(window=k).max()
     stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
