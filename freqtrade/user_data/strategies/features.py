@@ -119,6 +119,10 @@ def add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
     df["macd"] = macd_line
     df["macd_signal"] = macd_sig
     df["macd_hist"] = macd_hist
+    adx_val, plus_di, minus_di = adx(df["high"], df["low"], df["close"], 14)
+    df["adx_14"] = adx_val
+    df["plus_di_14"] = plus_di
+    df["minus_di_14"] = minus_di
     return df
 
 
@@ -155,8 +159,11 @@ def add_volume_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def add_candle_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    df["close_above_ema12"] = (df["close"] > ema(df["close"], 12)).astype(int)
-    df["close_above_ema26"] = (df["close"] > ema(df["close"], 26)).astype(int)
+    # 复用 add_trend_features 已生成的 ema 列，避免重复计算
+    ema_12 = df["ema_12"] if "ema_12" in df.columns else ema(df["close"], 12)
+    ema_26 = df["ema_26"] if "ema_26" in df.columns else ema(df["close"], 26)
+    df["close_above_ema12"] = (df["close"] > ema_12).astype(int)
+    df["close_above_ema26"] = (df["close"] > ema_26).astype(int)
     df["body_pct"] = abs(df["close"] - df["open"]) / (df["high"] - df["low"] + 1e-9)
     df["upper_wick_pct"] = (df["high"] - df[["close", "open"]].max(axis=1)) / (df["high"] - df["low"] + 1e-9)
     df["lower_wick_pct"] = (df[["close", "open"]].min(axis=1) - df["low"]) / (df["high"] - df["low"] + 1e-9)

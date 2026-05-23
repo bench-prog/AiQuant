@@ -193,6 +193,19 @@ class TestAddTrendFeatures:
         assert "macd" in df.columns
         assert "macd_signal" in df.columns
         assert "macd_hist" in df.columns
+        assert "adx_14" in df.columns
+        assert "plus_di_14" in df.columns
+        assert "minus_di_14" in df.columns
+
+    def test_adx_range(self, sample_ohlcv: pd.DataFrame) -> None:
+        """ADX 特征列值域验证。"""
+        df = add_trend_features(sample_ohlcv)
+        assert df["adx_14"].min() >= 0
+        assert df["adx_14"].max() <= 100
+        assert df["plus_di_14"].min() >= 0
+        assert df["plus_di_14"].max() <= 100
+        assert df["minus_di_14"].min() >= 0
+        assert df["minus_di_14"].max() <= 100
 
 
 class TestAddMomentumFeatures:
