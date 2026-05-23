@@ -13,6 +13,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 import ccxt
 import pandas as pd
@@ -59,13 +60,19 @@ def _to_perpetual_symbol(symbol: str) -> str:
     return symbol
 
 
-def _init_exchange(exchange_name: str, **options):
+def _init_exchange(exchange_name: str, **options) -> ccxt.Exchange:
     """初始化 ccxt exchange，启用速率限制。"""
     exchange_class = getattr(ccxt, exchange_name)
     return exchange_class({"enableRateLimit": True, **options})
 
 
-def _fetch_paginated(fetch_page, since: int, end_ms: int, parse_last_ts, limit: int = 1000):
+def _fetch_paginated(
+    fetch_page: Callable[[int, int], list],
+    since: int,
+    end_ms: int,
+    parse_last_ts: Callable[[list], int],
+    limit: int = 1000,
+) -> list:
     """
     通用分页拉取循环。
 
