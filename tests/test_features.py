@@ -10,6 +10,16 @@ import pandas as pd
 import pytest
 
 from features import (
+    add_candle_features,
+    add_funding_rate_features,
+    add_lag_features,
+    add_momentum_features,
+    add_open_interest_features,
+    add_return_features,
+    add_time_features,
+    add_trend_features,
+    add_volatility_features,
+    add_volume_features,
     adx,
     atr,
     bbands,
@@ -167,3 +177,165 @@ class TestVWAP:
         """VWAP 应该为正数。"""
         result = vwap(sample_ohlcv)
         assert (result.dropna() > 0).all()
+
+
+# ---------------------------------------------------------------------------
+# 特征组合函数集成测试
+# ---------------------------------------------------------------------------
+
+
+class TestAddTrendFeatures:
+    def test_columns(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_trend_features(sample_ohlcv)
+        assert "ema_12" in df.columns
+        assert "ema_26" in df.columns
+        assert "ema_50" in df.columns
+        assert "macd" in df.columns
+        assert "macd_signal" in df.columns
+        assert "macd_hist" in df.columns
+
+
+class TestAddMomentumFeatures:
+    def test_columns(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_momentum_features(sample_ohlcv)
+        assert "rsi_14" in df.columns
+        assert "rsi_6" in df.columns
+        assert "stoch_k" in df.columns
+        assert "stoch_d" in df.columns
+        assert "cci_20" in df.columns
+
+
+class TestAddVolatilityFeatures:
+    def test_columns(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_volatility_features(sample_ohlcv)
+        assert "atr_14" in df.columns
+        assert "bb_lower" in df.columns
+        assert "bb_middle" in df.columns
+        assert "bb_upper" in df.columns
+        assert "bb_width" in df.columns
+
+
+class TestAddVolumeFeatures:
+    def test_columns(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_volume_features(sample_ohlcv)
+        assert "volume_sma_20" in df.columns
+        assert "volume_ratio" in df.columns
+        assert "obv" in df.columns
+        assert "vwap" in df.columns
+
+
+class TestAddCandleFeatures:
+    def test_columns(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_candle_features(sample_ohlcv)
+        assert "close_above_ema12" in df.columns
+        assert "close_above_ema26" in df.columns
+        assert "body_pct" in df.columns
+        assert "upper_wick_pct" in df.columns
+        assert "lower_wick_pct" in df.columns
+
+    def test_binary_values(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_candle_features(sample_ohlcv)
+        assert set(df["close_above_ema12"].unique()).issubset({0, 1})
+        assert set(df["close_above_ema26"].unique()).issubset({0, 1})
+
+    def test_pct_range(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_candle_features(sample_ohlcv)
+        assert (df["body_pct"].dropna() >= 0).all() and (df["body_pct"].dropna() <= 1).all()
+        assert (df["upper_wick_pct"].dropna() >= 0).all() and (df["upper_wick_pct"].dropna() <= 1).all()
+        assert (df["lower_wick_pct"].dropna() >= 0).all() and (df["lower_wick_pct"].dropna() <= 1).all()
+
+
+class TestAddLagFeatures:
+    def test_columns(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_lag_features(sample_ohlcv)
+        expected = [f"return_lag_{i}" for i in [1, 2, 3, 5, 10]]
+        expected += [f"volume_lag_{i}" for i in [1, 2, 3, 5, 10]]
+        for col in expected:
+            assert col in df.columns
+
+    def test_custom_lags(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_lag_features(sample_ohlcv, lags=[1, 3])
+        assert "return_lag_1" in df.columns
+        assert "return_lag_3" in df.columns
+        assert "return_lag_2" not in df.columns
+
+
+class TestAddTimeFeatures:
+    def test_columns(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_time_features(sample_ohlcv)
+        assert "hour" in df.columns
+        assert "hour_sin" in df.columns
+        assert "hour_cos" in df.columns
+
+    def test_hour_range(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_time_features(sample_ohlcv)
+        assert (df["hour"] >= 0).all() and (df["hour"] <= 23).all()
+
+
+class TestAddReturnFeatures:
+    def test_columns(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_return_features(sample_ohlcv)
+        assert "return_6h" in df.columns
+        assert "return_24h" in df.columns
+        assert "volatility_12h" in df.columns
+
+
+class TestAddFundingRateFeatures:
+    def test_with_funding(self, sample_ohlcv_with_funding: pd.DataFrame) -> None:
+        df = add_funding_rate_features(sample_ohlcv_with_funding)
+        assert "funding_rate" in df.columns
+        assert "funding_rate_ema_8" in df.columns
+        assert "funding_rate_sign" in df.columns
+        assert "funding_rate_change" in df.columns
+
+    def test_without_funding(self, sample_ohlcv: pd.DataFrame) -> None:
+        """无 fundingRate 列时原样返回。"""
+        original_cols = set(sample_ohlcv.columns)
+        df = add_funding_rate_features(sample_ohlcv)
+        assert set(df.columns) == original_cols
+
+
+class TestAddOpenInterestFeatures:
+    def test_with_oi(self, sample_ohlcv_with_oi: pd.DataFrame) -> None:
+        df = add_open_interest_features(sample_ohlcv_with_oi)
+        assert "open_interest" in df.columns
+        assert "oi_ema_12" in df.columns
+        assert "oi_velocity" in df.columns
+
+    def test_without_oi(self, sample_ohlcv: pd.DataFrame) -> None:
+        """无 openInterest 列时原样返回。"""
+        original_cols = set(sample_ohlcv.columns)
+        df = add_open_interest_features(sample_ohlcv)
+        assert set(df.columns) == original_cols
+
+
+class TestBuildAllFeatures:
+    def test_all_columns_present(self, sample_ohlcv_with_funding: pd.DataFrame) -> None:
+        df = build_all_features(sample_ohlcv_with_funding)
+        # 核心特征列应该存在
+        expected = [
+            "ema_12", "rsi_14", "macd", "atr_14",
+            "bb_lower", "volume_ratio", "obv", "vwap",
+            "return_lag_1", "hour_sin", "return_6h",
+            "funding_rate", "funding_rate_sign",
+        ]
+        for col in expected:
+            assert col in df.columns, f"Missing column: {col}"
+
+    def test_no_inf(self, sample_ohlcv_with_funding: pd.DataFrame) -> None:
+        df = build_all_features(sample_ohlcv_with_funding)
+        numeric = df.select_dtypes(include=[np.number])
+        assert not np.isinf(numeric.values).any()
+
+
+class TestGetFeatureColumns:
+    def test_excludes_base_cols(self, sample_ohlcv: pd.DataFrame) -> None:
+        cols = get_feature_columns(sample_ohlcv)
+        base = {"open", "high", "low", "close", "volume", "date"}
+        assert not any(c in base for c in cols)
+
+    def test_includes_feature_cols(self, sample_ohlcv_with_funding: pd.DataFrame) -> None:
+        df = build_all_features(sample_ohlcv_with_funding)
+        cols = get_feature_columns(df)
+        assert "rsi_14" in cols
+        assert "macd" in cols
