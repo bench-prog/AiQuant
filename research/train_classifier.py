@@ -7,7 +7,7 @@
 
 输出:
   ../freqtrade/user_data/models/sklearn_model.pkl
-  ../freqtrade/user_data/models/feature_config.json
+  ../freqtrade/user_data/models/feature_config_lightgbm.json
 
 用法:
   cd research
@@ -23,14 +23,24 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-_project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(_project_root))
-from data.market_data import fetch_ohlcv_ccxt
-from data.service import query, merge_into
-import data.service_defaults  # registers built-in data sources
 from lightgbm import LGBMClassifier
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
+
+_project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(_project_root))
+
+from research.training_config import (
+    SYMBOL,
+    TIMEFRAME,
+    TRAIN_START,
+    TRAIN_END,
+    FULL_END,
+    EXCHANGE,
+    HORIZON,
+    MODEL_OUTPUT_DIR,
+)
+from research.data_utils import load_training_data, merge_external_data
 
 # Import shared feature engineering from strategies directory
 _strategies_dir = Path(__file__).parent.parent / "freqtrade" / "user_data" / "strategies"
@@ -39,61 +49,6 @@ from features import build_all_features, get_feature_columns  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-MODEL_OUTPUT_DIR = Path(__file__).parent.parent / "freqtrade" / "user_data" / "models"
-MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-SYMBOL = "BTC/USDT"
-TIMEFRAME = "1h"
-TRAIN_START = "2022-01-01"
-TRAIN_END = "2023-12-31"      # Hard cutoff: model never sees 2024 data
-FULL_END = "2024-12-31"       # Used only to cache data for convenience
-EXCHANGE = "binance"
-
-HORIZON = 1
-
-
-def load_data() -> pd.DataFrame:
-    """通过 ccxt 从 Binance 加载历史 OHLCV 数据。"""
-    df = fetch_ohlcv_ccxt(
-        symbol=SYMBOL,
-        timeframe=TIMEFRAME,
-        start_date=TRAIN_START,
-        end_date=FULL_END,
-        exchange_name=EXCHANGE,
-        use_cache=True,
-    )
-    logger.info(f"Loaded {len(df)} rows from {EXCHANGE}.")
-    return df
-
-
-def merge_external_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    将资金费率和持仓量数据合并进 OHLCV DataFrame。
-    委托给统一数据服务层处理。
-    """
-    df = df.copy()
-
-    try:
-        fr_df = query("funding_rate", SYMBOL, since=TRAIN_START, until=FULL_END,
-                      exchange_name=EXCHANGE, use_cache=True)
-        df = merge_into(df, fr_df, "fundingRate")
-        logger.info(f"Merged funding rate data ({len(fr_df)} records).")
-    except Exception as e:
-        logger.warning(f"Failed to fetch/merge funding rate: {e}")
-
-    try:
-        oi_df = query("open_interest", SYMBOL, since=TRAIN_START, until=FULL_END,
-                      exchange_name=EXCHANGE, timeframe=TIMEFRAME, use_cache=True)
-        df = merge_into(df, oi_df, "openInterest")
-        logger.info(f"Merged open interest data ({len(oi_df)} records).")
-    except Exception as e:
-        logger.warning(f"Failed to fetch/merge open interest: {e}")
-
-    return df
 
 
 def prepare_target(df: pd.DataFrame, horizon: int = HORIZON) -> pd.DataFrame:
@@ -230,7 +185,7 @@ def train_model(df: pd.DataFrame):
         "cv_auc_mean": float(np.mean(auc_scores)),
         "test_auc_2024": float(test_auc) if len(df_test) > 0 else None,
     }
-    config_path = MODEL_OUTPUT_DIR / "feature_config.json"
+    config_path = MODEL_OUTPUT_DIR / "feature_config_lightgbm.json"
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
     logger.info(f"Feature config saved to {config_path}")
@@ -239,7 +194,7 @@ def train_model(df: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    df = load_data()
+    df = load_training_data()
     df = merge_external_data(df)
     model = train_model(df)
     logger.info("Training complete.")
