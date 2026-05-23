@@ -44,6 +44,18 @@ freqtrade/user_data/logs/
 *.swp
 *.swo
 
+# Testing & Linting
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build
+*.egg-info/
+dist/
+build/
+
 # Backtest results
 freqtrade/user_data/backtest_results/
 freqtrade/user_data/hyperopt_results/

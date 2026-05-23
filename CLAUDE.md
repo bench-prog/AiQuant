@@ -53,7 +53,8 @@ AiQuant/
 │       │   ├── strategy_smallcap_v3_regime.py  # Small-cap regime-switching strategy (hyperopt)
 │       │   ├── strategy_smallcap_v2_turtle.py  # Small-cap turtle strategy
 │       │   └── strategy_smallcap_v1_event_driven.py  # Small-cap event-driven strategy
-│       ├── models/                     # Trained AI models (.pkl, .pt) + feature_config.json + drift_baseline.json
+│       │   └── strategy_gold_pulse_v1.py     # Gold pulse传导策略
+│       ├── models/                     # Trained AI models (.pkl, .pt) + feature_config + drift_baseline
 │       ├── data/                       # Historical price data downloaded by Freqtrade
 │       ├── notebooks/                  # Jupyter notebooks for research
 │       └── logs/                       # Strategy logs + drift_alerts.jsonl
@@ -61,9 +62,26 @@ AiQuant/
 │   ├── requirements.txt
 │   ├── alert_cli.py                    # Standalone CLI for drift alerts
 │   ├── train_classifier.py             # LightGBM with strict temporal split + drift baseline export
-│   └── train_sequence.py               # LSTM with temporal split + scaler export
+│   ├── train_sequence.py               # LSTM with temporal split + scaler export
+│   ├── training_config.py              # **Shared training config** (symbol, timeframe, date ranges)
+│   └── data_utils.py                   # **Shared data utilities** (load + merge external data)
+├── tests/                              # Unit and integration tests
+│   ├── conftest.py                     # Shared fixtures (synthetic OHLCV data)
+│   └── test_features.py                # features.py full coverage (39 test cases)
 ├── tools/                              # Operational tools
 │   └── update_smallcap_whitelist.py    # Refresh small-cap trading pair whitelist
+├── code_copilot/                       # AI coding collaboration framework
+│   ├── README.md
+│   ├── agents/                         # Agent prompts (copilot, spec-reviewer, code-quality-reviewer)
+│   ├── rules/                          # Project rules (coding style, security, domain)
+│   ├── knowledge/                      # Domain knowledge index
+│   └── changes/                        # Change management (templates + archives)
+├── deploy/                             # Docker deployment
+│   ├── Dockerfile
+│   └── docker-compose.yml
+├── Makefile                            # Common command shortcuts
+├── pytest.ini                          # Test configuration
+├── setup.sh
 └── .gitignore
 ```
 
@@ -186,8 +204,8 @@ The strategy `strategy_ai_model_v1.py` demonstrates the integration pattern:
 
 - Sklearn models: `freqtrade/user_data/models/sklearn_model.pkl`
 - PyTorch models: `freqtrade/user_data/models/pytorch_model.pt`
-- Feature config: `freqtrade/user_data/models/feature_config.json` (feature list, scaler params, train/test date ranges, etc.)
-- Drift baseline: `freqtrade/user_data/models/drift_baseline.json`
+- Feature config: `freqtrade/user_data/models/feature_config_{model_type}.json` — `feature_config_lightgbm.json` or `feature_config_lstm.json`
+- Drift baseline: `freqtrade/user_data/models/drift_baseline_{model_type}.json` — `drift_baseline.json` (legacy) or `drift_baseline_lstm.json`
 
 ---
 
@@ -205,8 +223,13 @@ The strategy `strategy_ai_model_v1.py` demonstrates the integration pattern:
 | `data/service_defaults.py` | Pre-registers default data sources (funding_rate, open_interest) | When adding new default sources |
 | `research/train_classifier.py` | Train LightGBM + export drift baseline | When tuning hyperparameters or target horizon |
 | `research/train_sequence.py` | Train LSTM with temporal split + scaler export | For neural network experiments |
+| `research/training_config.py` | Shared training configuration (symbol, timeframe, date ranges) | When changing training parameters |
+| `research/data_utils.py` | Shared data utilities (load + merge external data) | When changing data fetching logic |
 | `research/alert_cli.py` | Standalone CLI to send/test drift Telegram alerts | Rarely needed |
+| `tests/test_features.py` | Unit and integration tests for features.py | When adding/modifying features |
 | `tools/update_smallcap_whitelist.py` | Refresh small-cap pair whitelist from CoinPaprika | When updating universe criteria or exchange mappings |
+| `code_copilot/` | AI coding collaboration framework (Spec-driven development) | When updating coding standards or workflows |
+| `Makefile` | Common command shortcuts (test, train, backtest, lint) | When adding new common commands |
 | `deploy/Dockerfile` | Custom image with ML dependencies | When adding new Python packages |
 | `deploy/docker-compose.yml` | Container orchestration | Rarely needed |
 
@@ -261,6 +284,12 @@ docker compose -f deploy/docker-compose.yml exec freqtrade /bin/bash
 - [x] **StandardScaler support for PyTorch inference** — Training exports scaler params, strategy loads and applies them during sequence model inference
 - [x] **Backtest-compatible BTC market filter** — Lazy-loaded in `populate_indicators()` so regime strategy works in both backtest and live modes
 - [x] **Code deduplication** — `_prepare_features()` shared between classifier and sequence prediction; `_fetch_paginated()` / `_init_exchange()` in `market_data.py`
+- [x] **Training script refactoring** — Extracted `training_config.py` + `data_utils.py`, eliminated duplication, fixed LSTM `shuffle=True` data leakage
+- [x] **Model config naming convention** — `feature_config_{model_type}.json` + `drift_baseline_{model_type}.json` to prevent overwrite conflicts
+- [x] **pytest test framework** — 39 tests covering all features.py functions (unit + integration + degradation)
+- [x] **Type annotation completeness** — `features.py` (3 functions) + `market_data.py` (5 functions)
+- [x] **Makefile** — Common commands: `test`, `train-classifier`, `train-lstm`, `backtest-ai`, `backtest-smallcap`, `lint`
+- [x] **code_copilot framework** — AI coding collaboration framework with Spec-driven development workflow
 
 ## Roadmap Ideas
 
