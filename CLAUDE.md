@@ -305,3 +305,69 @@ docker compose -f deploy/docker-compose.yml exec freqtrade /bin/bash
 - [Freqtrade Strategy Customization](https://www.freqtrade.io/en/stable/strategy-customization/)
 - [Freqtrade with Machine Learning](https://www.freqtrade.io/en/stable/freqai/)
 - [ccxt Documentation](https://docs.ccxt.com/)
+
+---
+
+## Workflow — code_copilot 模式（每次会话必须遵守）
+
+> 本章节基于 `code_copilot/` 框架的「渐进式 Spec」方法论，是 Claude Code 每次会话的工作流铁律。
+
+### 核心原则
+
+1. **No Spec, No Code** — 没有文档，不准写代码
+2. **Spec is Truth** — 文档和代码冲突时，错的一定是代码
+3. **Reverse Sync** — 发现 Bug 或实现偏差，先修文档，再修代码
+4. **渐进式复杂度** — 简单需求（单行/单文件修 bug）不走重流程，复杂需求才加载完整 Spec
+
+### 启动检查（每次会话开始）
+
+1. 读取 `code_copilot/rules/` 下所有规则文件（project-context, coding-style, security, domain-rules）
+2. 读取 `code_copilot/knowledge/index.md`
+3. 检查 `code_copilot/changes/` 下是否有进行中的变更（排除 `templates/` 和 `archives/`）
+4. 报告当前状态
+
+### 需求分类与处理
+
+| 用户意图 | 映射动作 | 说明 |
+|---------|---------|------|
+| 新功能 / 新需求 | **先创建 Spec** | 复制 `code_copilot/changes/templates/spec.md`，逐段确认后进入编码 |
+| Bug 修复 / 改一下 | **先调查根因** | 四阶段：根因调查 → 模式分析 → 假设验证 → 实施修复 |
+| 帮我看看 / review | **两阶段审查** | 阶段一 Spec Compliance → 阶段二 Code Quality（独立上下文） |
+| 写测试 / 补单测 | **Red/Green TDD** | 测试必须先 Red 再 Green |
+| 纯技术讨论 | 直接回答 | 不涉及代码变更，无需走流程 |
+
+### 编码铁律
+
+- **每个 task 原子化**：3-5 个文件，做"小炸弹"而非"大炸弹"
+- **每个 task 完成后展示验证证据**：pytest 输出、类型检查、mypy 等
+- **零偏差原则**：Plan 是合同，AI 是打印机
+- **自动 git commit**：每个 task 一个 commit，message 格式 `[<变更名>] <中文简述>`
+- **禁止 main 分支直接变更**
+- **禁止自动 push**
+- **代码检查前置**：commit 前执行 `ruff check` / `mypy`
+
+### 量化交易专项红线
+
+- **涉及资金/交易逻辑变更** → 高亮提醒人工审查
+- **涉及特征工程/模型推理变更** → 提醒检查训练-推理一致性
+- **策略代码和训练脚本** 必须使用相同的特征计算逻辑
+- **新增特征** 必须同步更新 `feature_config.json`
+- **时序数据处理** 严格按时间顺序 split，`shuffle=False`
+- **`dry_run: true`** 是默认状态，切换实盘必须经过代码审查
+
+### Git 规范
+
+```
+[<变更名>] <中文简述>
+
+例：[funding-rate-features] 新增资金费率 EMA 和变化率特征
+```
+
+### 审查流程
+
+1. **Spec Compliance Review**：验证实现是否符合 spec（不信报告，只信代码）
+2. **Code Quality Review**：检查安全、可维护性、量化交易专项检查
+   - 特征工程训练/推理一致性
+   - 无数据泄漏（无未来信息）
+   - 异常处理兜底逻辑
+   - DataFrame 操作向量化
