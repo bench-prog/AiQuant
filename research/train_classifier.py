@@ -51,23 +51,37 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def prepare_target(df: pd.DataFrame, horizon: int = HORIZON) -> pd.DataFrame:
-    """生成二分类目标: future return > 0 则为 1，否则为 0。"""
+def prepare_target(
+    df: pd.DataFrame, horizon: int = HORIZON, threshold: float = 0.0
+) -> pd.DataFrame:
+    """生成二分类目标: future return > threshold 则为 1，否则为 0。
+
+    Args:
+        threshold: 最小涨幅阈值（如 0.002 = 0.2%）。
+            threshold > 0 时过滤微小波动，只预测显著上涨。
+    """
     df = df.copy()
     future_return = df["close"].shift(-horizon) / df["close"] - 1
-    df["target"] = (future_return > 0).astype(int)
+    df["target"] = (future_return > threshold).astype(int)
     return df
 
 
-def train_model(df: pd.DataFrame, symbol: str = SYMBOL):
+def train_model(
+    df: pd.DataFrame,
+    symbol: str = SYMBOL,
+    threshold: float = 0.0,
+    feature_importance_threshold: float = 0.01,
+):
     """在 TRAIN 时间段内训练 LightGBM，使用时序交叉验证。
 
     Args:
         df: 合并外部数据后的 OHLCV DataFrame
         symbol: 交易对，如 "BTC/USDT" 或 "ETH/USDT"
+        threshold: 目标阈值（如 0.002 = 0.2%），过滤微小波动
+        feature_importance_threshold: 特征重要性阈值，低于此值的特征被移除
     """
     df = build_all_features(df)
-    df = prepare_target(df)
+    df = prepare_target(df, threshold=threshold)
 
     feature_cols = get_feature_columns(df)
     feature_cols = [c for c in feature_cols if c != "target"]
@@ -87,9 +101,26 @@ def train_model(df: pd.DataFrame, symbol: str = SYMBOL):
     y = df_train["target"]
 
     logger.info(f"Symbol: {symbol}")
+    logger.info(f"Target threshold: {threshold:.4f} ({threshold*100:.2f}%)")
     logger.info(f"Training period: {df_train['date'].min()} ~ {df_train['date'].max()}")
-    logger.info(f"Features used ({len(feature_cols)}): {feature_cols[:5]}...")
+    logger.info(f"Initial features: {len(feature_cols)}")
     logger.info(f"Training samples: {len(X)}, Positive ratio: {y.mean():.2%}")
+
+    # 更保守的 LightGBM 超参，降低过拟合
+    lgbm_params = {
+        "n_estimators": 1000,
+        "learning_rate": 0.01,
+        "max_depth": 6,
+        "num_leaves": 31,
+        "min_child_samples": 50,
+        "reg_alpha": 0.1,
+        "reg_lambda": 1.0,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "random_state": 42,
+        "n_jobs": -1,
+        "verbose": -1,
+    }
 
     # 时序交叉验证（必须保持时间顺序）
     tscv = TimeSeriesSplit(n_splits=5)
@@ -99,20 +130,7 @@ def train_model(df: pd.DataFrame, symbol: str = SYMBOL):
         X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
         y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
 
-        model = LGBMClassifier(
-            n_estimators=500,
-            learning_rate=0.03,
-            max_depth=-1,
-            num_leaves=31,
-            min_child_samples=5,
-            reg_alpha=0.0,
-            reg_lambda=0.0,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            random_state=42,
-            n_jobs=-1,
-            verbose=-1,
-        )
+        model = LGBMClassifier(**lgbm_params)
         model.fit(X_train, y_train)
 
         val_pred = model.predict_proba(X_val)[:, 1]
@@ -122,25 +140,43 @@ def train_model(df: pd.DataFrame, symbol: str = SYMBOL):
 
     logger.info(f"Mean CV AUC: {np.mean(auc_scores):.4f} (+/- {np.std(auc_scores):.4f})")
 
-    # 最终模型: 在整个 TRAIN 时间段上训练
-    final_model = LGBMClassifier(
-        n_estimators=500,
-        learning_rate=0.03,
-        max_depth=-1,
-        num_leaves=31,
-        min_child_samples=5,
-        reg_alpha=0.0,
-        reg_lambda=0.0,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        random_state=42,
-        n_jobs=-1,
-        verbose=-1,
-    )
+    # 最终模型: 在整个 TRAIN 时间段上训练（用于特征重要性分析）
+    final_model = LGBMClassifier(**lgbm_params)
     final_model.fit(X, y)
 
+    # 特征重要性分析和筛选
+    importance = pd.Series(
+        final_model.feature_importances_,
+        index=feature_cols,
+        name="importance",
+    ).sort_values(ascending=False)
+
+    logger.info("Top 10 features by importance:")
+    for feat, imp in importance.head(10).items():
+        logger.info(f"  {feat}: {imp:.1f}")
+
+    # 筛选重要性高于阈值的特征
+    total_imp = importance.sum()
+    importance_ratio = importance / total_imp
+    selected_features = importance_ratio[
+        importance_ratio >= feature_importance_threshold
+    ].index.tolist()
+
+    removed = set(feature_cols) - set(selected_features)
+    logger.info(
+        f"Feature selection: {len(feature_cols)} -> {len(selected_features)} "
+        f"(removed {len(removed)} features with importance < {feature_importance_threshold*100:.1f}%)"
+    )
+    if removed:
+        logger.info(f"Removed: {sorted(removed)}")
+
+    # 用筛选后的特征重新训练最终模型
+    X_selected = X[selected_features]
+    final_model = LGBMClassifier(**lgbm_params)
+    final_model.fit(X_selected, y)
+
     # 从训练集预测分布导出漂移监控基线
-    train_pred = final_model.predict_proba(X)[:, 1]
+    train_pred = final_model.predict_proba(X_selected)[:, 1]
     baseline = {
         "mean": float(train_pred.mean()),
         "std": float(train_pred.std()),
@@ -168,12 +204,12 @@ def train_model(df: pd.DataFrame, symbol: str = SYMBOL):
     # 在预留 TEST 集 (2024) 上评估 — 仅作 sanity check
     test_mask = df["date"] >= pd.Timestamp(TRAIN_END, tz="UTC")
     df_test = df.loc[test_mask].copy()
-    test_valid = df_test[feature_cols + ["target"]].notnull().all(axis=1)
+    test_valid = df_test[selected_features + ["target"]].notnull().all(axis=1)
     df_test = df_test.loc[test_valid]
 
     test_auc: Optional[float] = None
     if len(df_test) > 0:
-        X_test = df_test[feature_cols]
+        X_test = df_test[selected_features]
         y_test = df_test["target"]
         test_pred = final_model.predict_proba(X_test)[:, 1]
         test_auc = roc_auc_score(y_test, test_pred)
@@ -189,13 +225,15 @@ def train_model(df: pd.DataFrame, symbol: str = SYMBOL):
     # 保存特征配置
     config = {
         "model_type": "lightgbm",
-        "feature_columns": feature_cols,
+        "feature_columns": selected_features,
         "symbol": symbol,
         "timeframe": TIMEFRAME,
         "horizon": HORIZON,
         "train_range": [TRAIN_START, TRAIN_END],
         "cv_auc_mean": float(np.mean(auc_scores)),
         "test_auc_2024": float(test_auc) if test_auc is not None else None,
+        "threshold": threshold,
+        "feature_importance_threshold": feature_importance_threshold,
     }
     config_path = pair_dir / "feature_config.json"
     with open(config_path, "w") as f:
@@ -213,10 +251,27 @@ if __name__ == "__main__":
         default=SYMBOL,
         help=f"Trading pair to train on (default: {SYMBOL})",
     )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.002,
+        help="Target threshold for 'significant up move' (default: 0.002 = 0.2%%)",
+    )
+    parser.add_argument(
+        "--feature-importance-threshold",
+        type=float,
+        default=0.01,
+        help="Minimum feature importance ratio to keep (default: 0.01 = 1%%)",
+    )
     args = parser.parse_args()
 
     logger.info(f"Starting training for {args.symbol}...")
     df = load_training_data(symbol=args.symbol)
     df = merge_external_data(df, symbol=args.symbol)
-    model = train_model(df, symbol=args.symbol)
+    model = train_model(
+        df,
+        symbol=args.symbol,
+        threshold=args.threshold,
+        feature_importance_threshold=args.feature_importance_threshold,
+    )
     logger.info("Training complete.")
