@@ -259,6 +259,13 @@ class TestAddVolatilityFeatures:
         assert "bb_middle" in df.columns
         assert "bb_upper" in df.columns
         assert "bb_width" in df.columns
+        assert "bb_position" in df.columns
+
+    def test_bb_position_finite(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = add_volatility_features(sample_ohlcv)
+        valid = df["bb_position"].dropna()
+        # close 可能突破布林带，所以 bb_position 不一定在 [0, 1]，但必须在有限范围
+        assert np.isfinite(valid).all()
 
 
 class TestAddVolumeFeatures:
@@ -268,6 +275,8 @@ class TestAddVolumeFeatures:
         assert "volume_ratio" in df.columns
         assert "obv" in df.columns
         assert "vwap" in df.columns
+        assert "obv_change_1h" in df.columns
+        assert "vwap_distance" in df.columns
 
 
 class TestAddCandleFeatures:

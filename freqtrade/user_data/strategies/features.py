@@ -159,6 +159,8 @@ def add_volatility_features(df: pd.DataFrame) -> pd.DataFrame:
     df["bb_middle"] = middle
     df["bb_upper"] = upper
     df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_middle"]
+    bb_range = df["bb_upper"] - df["bb_lower"]
+    df["bb_position"] = (df["close"] - df["bb_lower"]) / bb_range.replace(0, np.nan)
     return df
 
 
@@ -168,6 +170,9 @@ def add_volume_features(df: pd.DataFrame) -> pd.DataFrame:
     df["volume_ratio"] = df["volume"] / df["volume_sma_20"]
     df["obv"] = obv(df["close"], df["volume"])
     df["vwap"] = vwap(df)
+    df["obv_change_1h"] = df["obv"].diff(1)
+    vwap_safe = df["vwap"].replace(0, np.nan)
+    df["vwap_distance"] = (df["close"] - df["vwap"]) / vwap_safe
     return df
 
 
