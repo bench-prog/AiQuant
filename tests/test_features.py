@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from features import (
+    DEFAULT_REGISTRY,
     add_candle_features,
     add_funding_rate_features,
     add_lag_features,
@@ -393,3 +394,52 @@ class TestGetFeatureColumns:
         cols = get_feature_columns(df)
         assert "rsi_14" in cols
         assert "macd" in cols
+
+
+class TestFeatureRegistry:
+    def test_default_registry_has_all_features(self) -> None:
+        assert "trend" in DEFAULT_REGISTRY
+        assert "momentum" in DEFAULT_REGISTRY
+        assert "volatility" in DEFAULT_REGISTRY
+        assert "volume" in DEFAULT_REGISTRY
+
+    def test_list_features(self) -> None:
+        features = DEFAULT_REGISTRY.list_features()
+        assert "trend" in features
+        assert "momentum" in features
+
+    def test_list_features_by_category(self) -> None:
+        trend_features = DEFAULT_REGISTRY.list_features(category="trend")
+        assert "trend" in trend_features
+        assert "momentum" not in trend_features
+
+    def test_get_categories(self) -> None:
+        cats = DEFAULT_REGISTRY.get_categories()
+        assert "trend" in cats
+        assert "momentum" in cats
+
+    def test_compute_single(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = DEFAULT_REGISTRY.compute(sample_ohlcv.copy(), feature_names=["trend"])
+        assert "ema_12" in df.columns
+        assert "rsi_14" not in df.columns
+
+    def test_compute_multiple(self, sample_ohlcv: pd.DataFrame) -> None:
+        df = DEFAULT_REGISTRY.compute(
+            sample_ohlcv.copy(), feature_names=["trend", "momentum"]
+        )
+        assert "ema_12" in df.columns
+        assert "rsi_14" in df.columns
+        assert "atr_14" not in df.columns
+
+    def test_compute_all(self, sample_ohlcv_with_funding: pd.DataFrame) -> None:
+        df = DEFAULT_REGISTRY.compute(sample_ohlcv_with_funding.copy())
+        assert "ema_12" in df.columns
+        assert "rsi_14" in df.columns
+        assert "funding_rate" in df.columns
+
+    def test_compute_equivalent_to_build_all(
+        self, sample_ohlcv_with_funding: pd.DataFrame
+    ) -> None:
+        df_registry = DEFAULT_REGISTRY.compute(sample_ohlcv_with_funding.copy())
+        df_build = build_all_features(sample_ohlcv_with_funding.copy())
+        assert set(df_registry.columns) == set(df_build.columns)

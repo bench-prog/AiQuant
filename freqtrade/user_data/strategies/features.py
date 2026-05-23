@@ -327,3 +327,72 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
     """从 DataFrame 中剔除基础 OHLCV 列，返回特征列名列表。"""
     base_cols = {"open", "high", "low", "close", "volume", "date"}
     return [c for c in df.columns if c not in base_cols]
+
+
+# ---------------------------------------------------------------------------
+# 特征注册表（阶段 2）
+# ---------------------------------------------------------------------------
+
+class FeatureRegistry:
+    """特征注册表 — 按需计算 + 元数据管理。"""
+
+    def __init__(self):
+        self._features: dict[str, dict] = {}
+
+    def register(
+        self,
+        name: str,
+        func: callable,
+        category: str,
+        params: dict | None = None,
+    ) -> None:
+        """注册一个特征生成函数。"""
+        self._features[name] = {
+            "func": func,
+            "category": category,
+            "params": params,
+        }
+
+    def compute(
+        self,
+        df: pd.DataFrame,
+        feature_names: list[str] | None = None,
+        config: dict | None = None,
+    ) -> pd.DataFrame:
+        """按需计算指定特征组。"""
+        names = feature_names or list(self._features.keys())
+        for name in names:
+            meta = self._features[name]
+            cfg = config or meta.get("params")
+            if cfg is not None:
+                df = meta["func"](df, cfg)
+            else:
+                df = meta["func"](df)
+        return df
+
+    def list_features(self, category: str | None = None) -> list[str]:
+        """列出已注册的特征名。"""
+        if category is None:
+            return list(self._features.keys())
+        return [k for k, v in self._features.items() if v["category"] == category]
+
+    def get_categories(self) -> list[str]:
+        """列出所有类别。"""
+        return sorted(set(v["category"] for v in self._features.values()))
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._features
+
+
+# 预构建默认注册表
+DEFAULT_REGISTRY = FeatureRegistry()
+DEFAULT_REGISTRY.register("trend", add_trend_features, "trend")
+DEFAULT_REGISTRY.register("momentum", add_momentum_features, "momentum")
+DEFAULT_REGISTRY.register("volatility", add_volatility_features, "volatility")
+DEFAULT_REGISTRY.register("volume", add_volume_features, "volume")
+DEFAULT_REGISTRY.register("candle", add_candle_features, "candle")
+DEFAULT_REGISTRY.register("lag", add_lag_features, "lag")
+DEFAULT_REGISTRY.register("time", add_time_features, "time")
+DEFAULT_REGISTRY.register("return", add_return_features, "return")
+DEFAULT_REGISTRY.register("funding_rate", add_funding_rate_features, "funding_rate")
+DEFAULT_REGISTRY.register("open_interest", add_open_interest_features, "open_interest")
