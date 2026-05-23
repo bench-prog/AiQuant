@@ -15,10 +15,12 @@
   python train_classifier.py
 """
 
+import argparse
 import json
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 import joblib
 import numpy as np
@@ -30,17 +32,15 @@ from sklearn.model_selection import TimeSeriesSplit
 _project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(_project_root))
 
-from research.training_config import (
+from research.training_config import (  # noqa: E402
     SYMBOL,
     TIMEFRAME,
     TRAIN_START,
     TRAIN_END,
-    FULL_END,
-    EXCHANGE,
     HORIZON,
     MODEL_OUTPUT_DIR,
 )
-from research.data_utils import load_training_data, merge_external_data
+from research.data_utils import load_training_data, merge_external_data  # noqa: E402
 
 # Import shared feature engineering from strategies directory
 _strategies_dir = Path(__file__).parent.parent / "freqtrade" / "user_data" / "strategies"
@@ -59,8 +59,13 @@ def prepare_target(df: pd.DataFrame, horizon: int = HORIZON) -> pd.DataFrame:
     return df
 
 
-def train_model(df: pd.DataFrame):
-    """在 TRAIN 时间段内训练 LightGBM，使用时序交叉验证。"""
+def train_model(df: pd.DataFrame, symbol: str = SYMBOL):
+    """在 TRAIN 时间段内训练 LightGBM，使用时序交叉验证。
+
+    Args:
+        df: 合并外部数据后的 OHLCV DataFrame
+        symbol: 交易对，如 "BTC/USDT" 或 "ETH/USDT"
+    """
     df = build_all_features(df)
     df = prepare_target(df)
 
@@ -81,6 +86,7 @@ def train_model(df: pd.DataFrame):
     X = df_train[feature_cols]
     y = df_train["target"]
 
+    logger.info(f"Symbol: {symbol}")
     logger.info(f"Training period: {df_train['date'].min()} ~ {df_train['date'].max()}")
     logger.info(f"Features used ({len(feature_cols)}): {feature_cols[:5]}...")
     logger.info(f"Training samples: {len(X)}, Positive ratio: {y.mean():.2%}")
@@ -149,7 +155,12 @@ def train_model(df: pd.DataFrame):
         "hist_range": [0, 1],
         "n_samples": len(train_pred),
     }
-    baseline_path = MODEL_OUTPUT_DIR / "drift_baseline.json"
+
+    # 按币种创建输出子目录
+    pair_dir = MODEL_OUTPUT_DIR / symbol.replace("/", "_")
+    pair_dir.mkdir(parents=True, exist_ok=True)
+
+    baseline_path = pair_dir / "drift_baseline.json"
     with open(baseline_path, "w") as f:
         json.dump(baseline, f, indent=2)
     logger.info(f"Drift baseline saved to {baseline_path}")
@@ -171,7 +182,7 @@ def train_model(df: pd.DataFrame):
         logger.warning("No test data available for evaluation.")
 
     # 保存模型
-    model_path = MODEL_OUTPUT_DIR / "sklearn_model.pkl"
+    model_path = pair_dir / "sklearn_model.pkl"
     joblib.dump(final_model, model_path)
     logger.info(f"Model saved to {model_path}")
 
@@ -179,14 +190,14 @@ def train_model(df: pd.DataFrame):
     config = {
         "model_type": "lightgbm",
         "feature_columns": feature_cols,
-        "symbol": SYMBOL,
+        "symbol": symbol,
         "timeframe": TIMEFRAME,
         "horizon": HORIZON,
         "train_range": [TRAIN_START, TRAIN_END],
         "cv_auc_mean": float(np.mean(auc_scores)),
         "test_auc_2024": float(test_auc) if test_auc is not None else None,
     }
-    config_path = MODEL_OUTPUT_DIR / "feature_config_lightgbm.json"
+    config_path = pair_dir / "feature_config.json"
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)
     logger.info(f"Feature config saved to {config_path}")
@@ -195,7 +206,17 @@ def train_model(df: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    df = load_training_data()
-    df = merge_external_data(df)
-    model = train_model(df)
+    parser = argparse.ArgumentParser(description="Train LightGBM classifier for a given trading pair.")
+    parser.add_argument(
+        "--symbol",
+        type=str,
+        default=SYMBOL,
+        help=f"Trading pair to train on (default: {SYMBOL})",
+    )
+    args = parser.parse_args()
+
+    logger.info(f"Starting training for {args.symbol}...")
+    df = load_training_data(symbol=args.symbol)
+    df = merge_external_data(df, symbol=args.symbol)
+    model = train_model(df, symbol=args.symbol)
     logger.info("Training complete.")
