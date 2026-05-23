@@ -160,6 +160,7 @@ def train_model(df: pd.DataFrame):
     test_valid = df_test[feature_cols + ["target"]].notnull().all(axis=1)
     df_test = df_test.loc[test_valid]
 
+    test_auc: Optional[float] = None
     if len(df_test) > 0:
         X_test = df_test[feature_cols]
         y_test = df_test["target"]
@@ -183,7 +184,7 @@ def train_model(df: pd.DataFrame):
         "horizon": HORIZON,
         "train_range": [TRAIN_START, TRAIN_END],
         "cv_auc_mean": float(np.mean(auc_scores)),
-        "test_auc_2024": float(test_auc) if len(df_test) > 0 else None,
+        "test_auc_2024": float(test_auc) if test_auc is not None else None,
     }
     config_path = MODEL_OUTPUT_DIR / "feature_config_lightgbm.json"
     with open(config_path, "w") as f:
