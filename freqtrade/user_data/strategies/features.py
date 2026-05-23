@@ -8,6 +8,31 @@ AiQuant 共享特征工程模块。
 import numpy as np
 import pandas as pd
 
+# ---------------------------------------------------------------------------
+# 默认特征参数配置
+# ---------------------------------------------------------------------------
+# 所有 add_*_features() 的默认参数来源。
+# 训练脚本和策略可以通过 build_all_features(df, config=custom_config) 传入自定义配置。
+FEATURE_PARAMS = {
+    "ema_lengths": [12, 26, 50],
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "adx_length": 14,
+    "rsi_lengths": [14, 6],
+    "stoch": {"k": 14, "d": 3},
+    "cci_length": 20,
+    "williams_r_length": 14,
+    "mom_length": 10,
+    "atr_length": 14,
+    "bbands": {"length": 20, "std": 2.0},
+    "volume_sma_length": 20,
+    "lag_periods": [1, 2, 3, 5, 10],
+    "return_windows": {"short": 6, "long": 24},
+    "volatility_window": 12,
+    "funding_rate_ema_length": 8,
+    "oi_ema_lengths": [12, 24],
+    "oi_change_periods": [1, 6, 24],
+}
+
 
 def ema(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(span=length, adjust=False).mean()
@@ -122,39 +147,53 @@ def vwap(df: pd.DataFrame) -> pd.Series:
     return (tp * df["volume"]).cumsum() / df["volume"].cumsum()
 
 
-def add_trend_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_trend_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
+    params = params or FEATURE_PARAMS
     df = df.copy()
-    df["ema_12"] = ema(df["close"], 12)
-    df["ema_26"] = ema(df["close"], 26)
-    df["ema_50"] = ema(df["close"], 50)
-    macd_line, macd_sig, macd_hist = macd(df["close"], 12, 26, 9)
+    for length in params.get("ema_lengths", [12, 26, 50]):
+        df[f"ema_{length}"] = ema(df["close"], length)
+    macd_cfg = params.get("macd", {"fast": 12, "slow": 26, "signal": 9})
+    macd_line, macd_sig, macd_hist = macd(
+        df["close"], macd_cfg["fast"], macd_cfg["slow"], macd_cfg["signal"]
+    )
     df["macd"] = macd_line
     df["macd_signal"] = macd_sig
     df["macd_hist"] = macd_hist
-    adx_val, plus_di, minus_di = adx(df["high"], df["low"], df["close"], 14)
-    df["adx_14"] = adx_val
-    df["plus_di_14"] = plus_di
-    df["minus_di_14"] = minus_di
+    adx_len = params.get("adx_length", 14)
+    adx_val, plus_di, minus_di = adx(df["high"], df["low"], df["close"], adx_len)
+    df[f"adx_{adx_len}"] = adx_val
+    df[f"plus_di_{adx_len}"] = plus_di
+    df[f"minus_di_{adx_len}"] = minus_di
     return df
 
 
-def add_momentum_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_momentum_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
+    params = params or FEATURE_PARAMS
     df = df.copy()
-    df["rsi_14"] = rsi(df["close"], 14)
-    df["rsi_6"] = rsi(df["close"], 6)
-    stoch_k, stoch_d = stoch(df["high"], df["low"], df["close"], 14, 3)
+    for length in params.get("rsi_lengths", [14, 6]):
+        df[f"rsi_{length}"] = rsi(df["close"], length)
+    stoch_cfg = params.get("stoch", {"k": 14, "d": 3})
+    stoch_k, stoch_d = stoch(
+        df["high"], df["low"], df["close"], stoch_cfg["k"], stoch_cfg["d"]
+    )
     df["stoch_k"] = stoch_k
     df["stoch_d"] = stoch_d
-    df["cci_20"] = cci(df["high"], df["low"], df["close"], 20)
-    df["williams_r_14"] = williams_r(df["high"], df["low"], df["close"], 14)
-    df["mom_10"] = mom(df["close"], 10)
+    cci_len = params.get("cci_length", 20)
+    df[f"cci_{cci_len}"] = cci(df["high"], df["low"], df["close"], cci_len)
+    wr_len = params.get("williams_r_length", 14)
+    df[f"williams_r_{wr_len}"] = williams_r(df["high"], df["low"], df["close"], wr_len)
+    mom_len = params.get("mom_length", 10)
+    df[f"mom_{mom_len}"] = mom(df["close"], mom_len)
     return df
 
 
-def add_volatility_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_volatility_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
+    params = params or FEATURE_PARAMS
     df = df.copy()
-    df["atr_14"] = atr(df["high"], df["low"], df["close"], 14)
-    lower, middle, upper = bbands(df["close"], 20, 2.0)
+    atr_len = params.get("atr_length", 14)
+    df[f"atr_{atr_len}"] = atr(df["high"], df["low"], df["close"], atr_len)
+    bb_cfg = params.get("bbands", {"length": 20, "std": 2.0})
+    lower, middle, upper = bbands(df["close"], bb_cfg["length"], bb_cfg["std"])
     df["bb_lower"] = lower
     df["bb_middle"] = middle
     df["bb_upper"] = upper
@@ -164,10 +203,12 @@ def add_volatility_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_volume_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_volume_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
+    params = params or FEATURE_PARAMS
     df = df.copy()
-    df["volume_sma_20"] = df["volume"].rolling(window=20).mean()
-    df["volume_ratio"] = df["volume"] / df["volume_sma_20"]
+    vol_sma = params.get("volume_sma_length", 20)
+    df[f"volume_sma_{vol_sma}"] = df["volume"].rolling(window=vol_sma).mean()
+    df["volume_ratio"] = df["volume"] / df[f"volume_sma_{vol_sma}"]
     df["obv"] = obv(df["close"], df["volume"])
     df["vwap"] = vwap(df)
     df["obv_change_1h"] = df["obv"].diff(1)
@@ -189,11 +230,14 @@ def add_candle_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_lag_features(df: pd.DataFrame, lags: list[int] = None) -> pd.DataFrame:
-    if lags is None:
-        lags = [1, 2, 3, 5, 10]
+def add_lag_features(df: pd.DataFrame, params: dict = None, lags: list[int] = None) -> pd.DataFrame:
+    if lags is not None:
+        lag_periods = lags
+    else:
+        params = params or FEATURE_PARAMS
+        lag_periods = params.get("lag_periods", [1, 2, 3, 5, 10])
     df = df.copy()
-    for lag in lags:
+    for lag in lag_periods:
         df[f"return_lag_{lag}"] = df["close"].pct_change(lag)
         df[f"volume_lag_{lag}"] = df["volume"].shift(lag)
     return df
@@ -207,15 +251,18 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_return_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_return_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
+    params = params or FEATURE_PARAMS
     df = df.copy()
-    df["return_6h"] = df["close"].pct_change(6)
-    df["return_24h"] = df["close"].pct_change(24)
-    df["volatility_12h"] = df["close"].pct_change().rolling(12).std()
+    ret_cfg = params.get("return_windows", {"short": 6, "long": 24})
+    df[f"return_{ret_cfg['short']}h"] = df["close"].pct_change(ret_cfg["short"])
+    df[f"return_{ret_cfg['long']}h"] = df["close"].pct_change(ret_cfg["long"])
+    vol_win = params.get("volatility_window", 12)
+    df[f"volatility_{vol_win}h"] = df["close"].pct_change().rolling(vol_win).std()
     return df
 
 
-def add_funding_rate_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_funding_rate_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
     """
     资金费率相关特征。
 
@@ -225,15 +272,17 @@ def add_funding_rate_features(df: pd.DataFrame) -> pd.DataFrame:
     if "fundingRate" not in df.columns:
         return df
 
+    params = params or FEATURE_PARAMS
     df = df.copy()
     df["funding_rate"] = df["fundingRate"]
-    df["funding_rate_ema_8"] = ema(df["funding_rate"], 8)
+    ema_len = params.get("funding_rate_ema_length", 8)
+    df[f"funding_rate_ema_{ema_len}"] = ema(df["funding_rate"], ema_len)
     df["funding_rate_sign"] = np.sign(df["funding_rate"])
     df["funding_rate_change"] = df["funding_rate"].diff()
     return df
 
 
-def add_open_interest_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_open_interest_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
     """
     持仓量相关特征。
 
@@ -243,14 +292,14 @@ def add_open_interest_features(df: pd.DataFrame) -> pd.DataFrame:
     if "openInterest" not in df.columns:
         return df
 
+    params = params or FEATURE_PARAMS
     df = df.copy()
     # 对数缩放处理绝对值过大的问题
     df["open_interest"] = np.log1p(df["openInterest"])
-    df["oi_ema_12"] = ema(df["open_interest"], 12)
-    df["oi_ema_24"] = ema(df["open_interest"], 24)
-    df["oi_change_1h"] = df["open_interest"].diff(1)
-    df["oi_change_6h"] = df["open_interest"].diff(6)
-    df["oi_change_24h"] = df["open_interest"].diff(24)
+    for length in params.get("oi_ema_lengths", [12, 24]):
+        df[f"oi_ema_{length}"] = ema(df["open_interest"], length)
+    for period in params.get("oi_change_periods", [1, 6, 24]):
+        df[f"oi_change_{period}h"] = df["open_interest"].diff(period)
 
     # OI 速度: OI 变化率除以成交量，反映持仓建立/清算的强度
     volume_safe = df["volume"].replace(0, np.nan)
@@ -258,18 +307,19 @@ def add_open_interest_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def build_all_features(df: pd.DataFrame) -> pd.DataFrame:
+def build_all_features(df: pd.DataFrame, config: dict = None) -> pd.DataFrame:
     """按顺序构建全部特征。"""
-    df = add_trend_features(df)
-    df = add_momentum_features(df)
-    df = add_volatility_features(df)
-    df = add_volume_features(df)
+    cfg = config or FEATURE_PARAMS
+    df = add_trend_features(df, cfg)
+    df = add_momentum_features(df, cfg)
+    df = add_volatility_features(df, cfg)
+    df = add_volume_features(df, cfg)
     df = add_candle_features(df)
-    df = add_lag_features(df)
+    df = add_lag_features(df, cfg)
     df = add_time_features(df)
-    df = add_return_features(df)
-    df = add_funding_rate_features(df)
-    df = add_open_interest_features(df)
+    df = add_return_features(df, cfg)
+    df = add_funding_rate_features(df, cfg)
+    df = add_open_interest_features(df, cfg)
     return df
 
 
