@@ -16,6 +16,9 @@
 - **训练脚本公共模块**: `research/data_utils.py` 封装 `load_training_data()` 和 `merge_external_data()`，训练脚本复用 → `research/data_utils.py`
 - **模型配置命名约定**: 配置文件按 `feature_config_{model_type}.json`（lightgbm/lstm），漂移基线按 `drift_baseline_{model_type}.json` → `freqtrade/user_data/models/`
 - **时序数据 DataLoader**: 时序模型训练必须设置 `shuffle=False`，否则破坏时间顺序导致数据泄漏
+- **pytest pythonpath 配置**: `pytest.ini` 中设置 `pythonpath = . freqtrade/user_data/strategies data` 让测试直接导入策略模块
+- **合成测试数据**: 固定 `np.random.seed(42)`，确保可复现；验证 high >= max(open, close) 避免不合理数据
+- **EMA 测试断言**: 短期 EMA 的 std > 长期 EMA（更敏感），而非 mean deviation
 
 ## 特征清单
 
