@@ -12,8 +12,8 @@ from pathlib import Path
 # 数据参数
 # ---------------------------------------------------------------------------
 SYMBOL: str = "BTC/USDT"
-TIMEFRAME: str = "1h"
-TRAIN_START: str = "2022-01-01"
+TIMEFRAME: str = "1d"
+TRAIN_START: str = "2020-01-01"
 TRAIN_END: str = "2023-12-31"
 FULL_END: str = "2024-12-31"
 EXCHANGE: str = "binance"

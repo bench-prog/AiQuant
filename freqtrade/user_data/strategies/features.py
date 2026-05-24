@@ -377,6 +377,56 @@ def get_feature_columns(df: pd.DataFrame) -> list[str]:
     return [c for c in df.columns if c not in base_cols]
 
 
+def add_higher_timeframe_features(
+    df_1h: pd.DataFrame,
+    df_4h: pd.DataFrame | None = None,
+    df_1d: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """将大时间框架特征合并到主时间框架（1h）。
+
+    大时间框架只计算核心趋势/动量/波动率指标，通过前向填充对齐到 1h。
+    关键：高层蜡烛的时间戳是周期起点，数据到周期结尾才已知。
+    因此将时间戳偏移一个周期长度，确保 ffill 只用已完成蜡烛的数据，
+    避免未来信息泄漏。
+    新增列名格式: {original_col}_{tf}，如 ema_12_4h、rsi_14_1d。
+    """
+    _base_cols = {"open", "high", "low", "close", "volume", "date"}
+    df = df_1h.copy()
+
+    if df_4h is not None and len(df_4h) > 0:
+        # 4h: 趋势 + 动量 + 波动率
+        df_4h = add_trend_features(df_4h)
+        df_4h = add_momentum_features(df_4h)
+        df_4h = add_volatility_features(df_4h)
+        df_4h = df_4h.set_index("date")
+        # 将时间戳从周期起点偏移到周期终点（+4h），确保只用已完成蜡烛
+        df_4h.index = df_4h.index + pd.Timedelta(hours=4)
+        for col in df_4h.columns:
+            if col not in _base_cols:
+                df[f"{col}_4h"] = (
+                    df_4h[col]
+                    .reindex(df["date"], method="ffill")
+                    .values
+                )
+
+    if df_1d is not None and len(df_1d) > 0:
+        # 1d: 趋势 + 动量
+        df_1d = add_trend_features(df_1d)
+        df_1d = add_momentum_features(df_1d)
+        df_1d = df_1d.set_index("date")
+        # 将时间戳从周期起点偏移到周期终点（+24h），确保只用已完成蜡烛
+        df_1d.index = df_1d.index + pd.Timedelta(days=1)
+        for col in df_1d.columns:
+            if col not in _base_cols:
+                df[f"{col}_1d"] = (
+                    df_1d[col]
+                    .reindex(df["date"], method="ffill")
+                    .values
+                )
+
+    return df
+
+
 # ---------------------------------------------------------------------------
 # 特征注册表（阶段 2）
 # ---------------------------------------------------------------------------

@@ -45,7 +45,7 @@ from research.data_utils import load_training_data, merge_external_data  # noqa:
 # Import shared feature engineering from strategies directory
 _strategies_dir = Path(__file__).parent.parent / "freqtrade" / "user_data" / "strategies"
 sys.path.insert(0, str(_strategies_dir))
-from features import build_all_features, get_feature_columns  # noqa: E402
+from features import build_all_features, get_feature_columns, add_higher_timeframe_features  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -66,21 +66,93 @@ def prepare_target(
     return df
 
 
+def tune_hyperparameters(
+    X: pd.DataFrame,
+    y: pd.Series,
+    n_trials: int = 50,
+    random_state: int = 42,
+) -> tuple[dict, float]:
+    """用 Optuna 搜索 LightGBM 超参，使用时序交叉验证评估。
+
+    Args:
+        X: 特征矩阵
+        y: 目标变量
+        n_trials: Optuna 试验次数
+        random_state: 随机种子
+
+    Returns:
+        (best_params, best_auc): 最佳超参字典和对应的 CV AUC
+    """
+    import optuna
+
+    def objective(trial: optuna.Trial) -> float:
+        params = {
+            "n_estimators": 1000,
+            "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.1, log=True),
+            "max_depth": trial.suggest_int("max_depth", 3, 12),
+            "num_leaves": trial.suggest_int("num_leaves", 15, 127),
+            "min_child_samples": trial.suggest_int("min_child_samples", 10, 100),
+            "reg_alpha": trial.suggest_float("reg_alpha", 1e-4, 10.0, log=True),
+            "reg_lambda": trial.suggest_float("reg_lambda", 1e-4, 10.0, log=True),
+            "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+            "random_state": random_state,
+            "n_jobs": -1,
+            "verbose": -1,
+        }
+
+        tscv = TimeSeriesSplit(n_splits=3)
+        auc_scores = []
+
+        for train_idx, val_idx in tscv.split(X):
+            X_tr, X_val = X.iloc[train_idx], X.iloc[val_idx]
+            y_tr, y_val = y.iloc[train_idx], y.iloc[val_idx]
+
+            model = LGBMClassifier(**params)
+            model.fit(X_tr, y_tr)
+            val_pred = model.predict_proba(X_val)[:, 1]
+            auc_scores.append(roc_auc_score(y_val, val_pred))
+
+        return float(np.mean(auc_scores))
+
+    study = optuna.create_study(
+        direction="maximize",
+        sampler=optuna.samplers.TPESampler(seed=random_state),
+    )
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+
+    logger.info(f"Best trial #{study.best_trial.number}, AUC: {study.best_value:.4f}")
+    logger.info("Best params:")
+    for k, v in study.best_params.items():
+        logger.info(f"  {k}: {v}")
+
+    return study.best_params, study.best_value
+
+
 def train_model(
     df: pd.DataFrame,
     symbol: str = SYMBOL,
     threshold: float = 0.0,
     feature_importance_threshold: float = 0.01,
+    df_4h: pd.DataFrame | None = None,
+    df_1d: pd.DataFrame | None = None,
+    tune_trials: int = 0,
+    params_override: dict | None = None,
 ):
     """在 TRAIN 时间段内训练 LightGBM，使用时序交叉验证。
 
     Args:
-        df: 合并外部数据后的 OHLCV DataFrame
+        df: 合并外部数据后的 OHLCV DataFrame (1h)
         symbol: 交易对，如 "BTC/USDT" 或 "ETH/USDT"
         threshold: 目标阈值（如 0.002 = 0.2%），过滤微小波动
         feature_importance_threshold: 特征重要性阈值，低于此值的特征被移除
+        df_4h: 4h 周期 DataFrame（多时间框架特征）
+        df_1d: 1d 周期 DataFrame（多时间框架特征）
+        tune_trials: >0 时运行 Optuna 超参搜索，试验次数
+        params_override: 直接指定超参字典（优先级高于默认值，但低于 --tune）
     """
     df = build_all_features(df)
+    df = add_higher_timeframe_features(df, df_4h=df_4h, df_1d=df_1d)
     df = prepare_target(df, threshold=threshold)
 
     feature_cols = get_feature_columns(df)
@@ -121,6 +193,22 @@ def train_model(
         "n_jobs": -1,
         "verbose": -1,
     }
+
+    # Optuna 超参搜索
+    if tune_trials > 0:
+        logger.info(f"Running Optuna hyperparameter search ({tune_trials} trials)...")
+        best_params, best_auc = tune_hyperparameters(X, y, n_trials=tune_trials)
+        params_override = best_params  # tune 结果覆盖手动指定的 params
+        tuned_params = best_params
+    else:
+        tuned_params = None
+
+    if params_override:
+        lgbm_params.update({
+            k: v for k, v in params_override.items()
+            if k in lgbm_params
+        })
+        logger.info("Using overridden hyperparameters.")
 
     # 时序交叉验证（必须保持时间顺序）
     tscv = TimeSeriesSplit(n_splits=5)
@@ -240,6 +328,12 @@ def train_model(
         json.dump(config, f, indent=2)
     logger.info(f"Feature config saved to {config_path}")
 
+    if tuned_params:
+        params_path = pair_dir / "best_params.json"
+        with open(params_path, "w") as f:
+            json.dump(tuned_params, f, indent=2)
+        logger.info(f"Best params saved to {params_path}")
+
     return final_model
 
 
@@ -263,15 +357,64 @@ if __name__ == "__main__":
         default=0.01,
         help="Minimum feature importance ratio to keep (default: 0.01 = 1%%)",
     )
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        default=False,
+        help="Run Optuna hyperparameter search before training",
+    )
+    parser.add_argument(
+        "--tune-trials",
+        type=int,
+        default=50,
+        help="Number of Optuna trials (default: 50)",
+    )
+    parser.add_argument(
+        "--params",
+        type=str,
+        default=None,
+        help="Path to best_params.json to use instead of defaults (e.g. models/BTC_USDT/best_params.json)",
+    )
     args = parser.parse_args()
 
     logger.info(f"Starting training for {args.symbol}...")
-    df = load_training_data(symbol=args.symbol)
-    df = merge_external_data(df, symbol=args.symbol)
+
+    # 下载主时间框架数据
+    timeframe = TIMEFRAME
+    logger.info(f"Loading {timeframe} data...")
+    df_main = load_training_data(symbol=args.symbol, timeframe=timeframe)
+    df_main = merge_external_data(df_main, symbol=args.symbol, timeframe=timeframe)
+
+    # 多时间框架：仅在 1h 主框架时加载 4h/1d（4h 主框架无需更高层）
+    df_4h = None
+    df_1d = None
+    if timeframe == "1h":
+        logger.info("Loading 4h data...")
+        df_4h = load_training_data(symbol=args.symbol, timeframe="4h")
+        df_4h = merge_external_data(df_4h, symbol=args.symbol, timeframe="4h")
+        logger.info("Loading 1d data...")
+        df_1d = load_training_data(symbol=args.symbol, timeframe="1d")
+        df_1d = merge_external_data(df_1d, symbol=args.symbol, timeframe="1d")
+
+    # 加载外部超参文件
+    params_override = None
+    if args.params:
+        params_path = Path(args.params)
+        if not params_path.exists():
+            logger.error(f"Params file not found: {params_path}")
+            sys.exit(1)
+        with open(params_path) as f:
+            params_override = json.load(f)
+        logger.info(f"Loaded params from {params_path}")
+
     model = train_model(
-        df,
+        df_main,
         symbol=args.symbol,
         threshold=args.threshold,
         feature_importance_threshold=args.feature_importance_threshold,
+        df_4h=df_4h,
+        df_1d=df_1d,
+        tune_trials=args.tune_trials if args.tune else 0,
+        params_override=params_override,
     )
     logger.info("Training complete.")

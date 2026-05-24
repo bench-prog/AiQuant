@@ -44,7 +44,7 @@ from data.service import query, merge_into  # noqa: E402
 import data.service_defaults  # noqa: E402,F401  # registers built-in data sources
 
 # Shared feature engineering (same code used in training)
-from features import build_all_features  # noqa: E402
+from features import build_all_features, add_higher_timeframe_features  # noqa: E402
 
 # Drift detection utilities (pure numpy/pandas, no external deps)
 # Drift detection utilities (inline to keep strategy self-contained)
@@ -179,7 +179,7 @@ class AIModelStrategy(IStrategy):
     """加载外部 ML 模型生成交易信号的 AI 驱动策略。"""
 
     # --- 策略元数据 ---
-    timeframe = "1h"
+    timeframe = "4h"
     stoploss = -0.07          # 更紧止损，控制单笔亏损
     trailing_stop = True
     trailing_stop_positive = 0.015   # 回调 1.5% 止盈
@@ -400,6 +400,17 @@ class AIModelStrategy(IStrategy):
         info["candle_count"] = self.candle_count
 
     # ------------------------------------------------------------------
+    # 多时间框架
+    # ------------------------------------------------------------------
+    def informative_pairs(self):
+        """定义额外时间框架的数据源（1d，主框架为 4h）。"""
+        pairs = self.dp.current_whitelist()
+        informative = []
+        for p in pairs:
+            informative.append((p, "1d"))
+        return informative
+
+    # ------------------------------------------------------------------
     # 特征工程
     # ------------------------------------------------------------------
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
@@ -440,6 +451,16 @@ class AIModelStrategy(IStrategy):
 
         # Build all features (identical to training pipeline)
         dataframe = build_all_features(dataframe)
+
+        # --- Multi-timeframe features ---------------------------------------
+        # 主框架为 4h，仅合并 1d 特征（时间戳已 shift 24h 防泄漏）
+        try:
+            informative_1d = self.dp.get_pair_dataframe(pair, "1d")
+        except Exception:
+            informative_1d = None
+        dataframe = add_higher_timeframe_features(
+            dataframe, df_4h=None, df_1d=informative_1d
+        )
 
         # --- Model inference ------------------------------------------------
         if self.model_type == "sklearn" and self.sklearn_model is not None:
