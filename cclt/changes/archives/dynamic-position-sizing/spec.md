@@ -112,6 +112,7 @@
 |------|------|-------------|------|
 | Task 1: POSITION_SIZING_CONFIG + custom_stake_amount() 骨架 | ✅ | `strategy_ai_model_v1.py` | POSITION_SIZING_CONFIG 字典 + custom_stake_amount() 方法签名 |
 | Task 2: 置信度因子 + 波动率因子计算逻辑 | ✅ | `strategy_ai_model_v1.py` | _compute_confidence_factor() + _compute_volatility_factor() 完整实现 |
+| 参数调优（Reverse Sync） | ✅ | `strategy_ai_model_v1.py` | threshold_low: 0.60→0.55, target_atr_pct: 0.02→0.015（基于 BTC 4h ATR 均值 1.38%） |
 | Task 3: 配置更新 + 测试 + 回归验证 | ✅ | `config_ai_model.json`, `tests/test_position_sizing.py` | stake_amount → "unlimited", 20 个测试用例, 80/80 测试通过 |
 
 ## 12. 审查结论
