@@ -54,3 +54,7 @@
 - **Freqtrade 策略状态隔离**: 策略单实例按 pair 顺序调用 `populate_indicators()`，必须用 `_activate_pair()` / `_save_pair()` 配对避免状态交叉污染 → `strategy_ai_model_v1.py::populate_indicators`
 - **多币种向后兼容**: 新布局下保留 `_load_legacy_model()` 回退路径，保护已有单币种部署 → `strategy_ai_model_v1.py::_load_legacy_model`
 - **多时间框架白名单同步**: `informative_pairs()` 返回的白名单必须和主时间框架一致，否则缺少数据导致特征缺失 → `strategy_ai_model_v1.py::informative_pairs`
+- **安全除法模式**: pandas Series 除法前用 `.replace(0, np.nan)` 避免除零产生 inf，修复后需 `fillna()` 处理边界值 → `features.py`
+- **空字典防御**: Python 中 `{}` 是 truthy，`params or FEATURE_PARAMS` 不会 fallback，必须用 `is not None` 判断 → `features.py`
+- **配置一致性**: `trading_mode` 和 `exchange.ccxt_config.options.defaultType` 必须匹配，否则交易行为异常 → `config_*.json`
+- **外部数据窗口限制**: 回测时请求全周期外部数据会导致缓存膨胀，应限制为合理窗口（如 90 天）→ `strategy_ai_model_v1.py::populate_indicators`
