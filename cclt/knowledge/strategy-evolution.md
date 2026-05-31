@@ -103,8 +103,8 @@ AI 模型驱动:
 
 ```
 2026-01  ▶ 多币种 AI 策略
-         ├── [[multi-pair-strategy]]: ETH/USDT + SOL/USDT 模型
-         ├── 策略币种路由改造
+         ├── [[multi-pair-strategy]]: 10 个币种独立模型 (BTC/ETH/SOL/BNB/ADA/AVAX/DOGE/LINK/PAXG/XRP)
+         ├── 策略币种路由改造 (_pair_models + _activate_pair/_save_pair)
          └── 回测优化: 目标阈值 + 正则化 + 特征筛选
 
 2026-02  ▶ 策略参数优化
@@ -126,8 +126,8 @@ AI 模型驱动:
 
 2026-05  ▶ cclt Skill 驱动 (v2)
          ├── [[cclt-skill]]: Skill 驱动 + SessionStart/Stop hooks
-         ├── [[features-enhancement]]: 特征增强 (待 apply)
-         └── [[features-parametrization]]: 参数化重构 (待 apply)
+         ├── [[features-enhancement]]: 特征增强 ✅ 已归档 (ADX修复+6新指标+类型注解)
+         └── [[features-parametrization]]: 参数化重构 ✅ 已归档 (FEATURE_PARAMS+FeatureRegistry+YAML配置)
 ```
 
 ---
