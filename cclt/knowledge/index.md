@@ -50,3 +50,7 @@
 - **FeatureRegistry 按需计算**: 按特征组名计算避免全量开销，支持元数据管理和配置驱动 → `features.py::FeatureRegistry`
 - **YAML 配置驱动特征**: `load_feature_config()` 支持 "default"/"minimal" 预设，为 A/B 实验和多策略配置打基础 → `features.py::load_feature_config`
 - **大时间框架防泄漏**: 4h/1d 特征合并到 1h 时，时间戳需偏移一个周期长度后再 ffill，避免用未完成蜡烛数据 → `features.py::add_higher_timeframe_features`
+- **多币种模型部署模式**: `models/<PAIR>/` 子目录结构，每个 pair 独立模型+配置+基线，便于批量部署和版本管理 → `freqtrade/user_data/models/`
+- **Freqtrade 策略状态隔离**: 策略单实例按 pair 顺序调用 `populate_indicators()`，必须用 `_activate_pair()` / `_save_pair()` 配对避免状态交叉污染 → `strategy_ai_model_v1.py::populate_indicators`
+- **多币种向后兼容**: 新布局下保留 `_load_legacy_model()` 回退路径，保护已有单币种部署 → `strategy_ai_model_v1.py::_load_legacy_model`
+- **多时间框架白名单同步**: `informative_pairs()` 返回的白名单必须和主时间框架一致，否则缺少数据导致特征缺失 → `strategy_ai_model_v1.py::informative_pairs`
