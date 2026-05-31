@@ -48,7 +48,9 @@ cclt/
 │   ├── security.md                     # 安全红线
 │   └── domain-rules.md                 # 量化交易领域约束
 ├── knowledge/                          # 领域知识（按需加载）
-│   └── index.md                        # 知识索引
+│   ├── index.md                        # 知识索引
+│   └── strategy-evolution.md           # 策略演进跟踪
+├── process.md                          # 策略开发流程规范
 └── changes/                            # 变更管理
     ├── templates/                      # 模板目录
     │   ├── spec.md                     # Spec 模板

@@ -312,6 +312,20 @@ docker compose -f deploy/docker-compose.yml exec freqtrade /bin/bash
 > 本工程使用 **cclt** skill 驱动协作流程。SessionStart hook 自动加载 skill，
 > 自然语言即可触发子命令，无需手动记命令。详见 `cclt/` 目录。
 
+### 核心文档
+
+| 文档 | 路径 | 用途 |
+|------|------|------|
+| 策略演进跟踪 | `cclt/knowledge/strategy-evolution.md` | 策略总览、演进时间线、路线图、变更记录 |
+| 开发流程规范 | `cclt/process.md` | 何时创建变更、命名规范、审查检查清单 |
+| 知识索引 | `cclt/knowledge/index.md` | 技术约定、特征清单、踩坑记录 |
+
+### 每次策略变更必须记录
+
+- **新增/修改策略** → 更新 `strategy-evolution.md` 策略总览 + 演进时间线
+- **特征/模型变更** → 更新 `knowledge/index.md` 特征清单
+- **cclt 变更归档** → 追加变更记录到 `strategy-evolution.md`
+
 ### 量化交易硬红线（始终生效）
 
 - **涉及资金/交易逻辑变更** → ⚠️ 高亮提醒人工审查

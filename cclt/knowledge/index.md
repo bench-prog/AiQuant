@@ -35,6 +35,11 @@
 | 资金费率 | funding_rate, funding_rate_ema_8, sign, change | 资金费率特征 |
 | 持仓量 | open_interest, oi_ema_12/24, oi_change_1h/6h/24h, oi_velocity | OI 特征 |
 
+## 相关文档
+
+- **策略演进跟踪**: `cclt/knowledge/strategy-evolution.md` — 策略总览、演进时间线、特征/模型演进、路线图、变更记录
+- **开发流程规范**: `cclt/process.md` — cclt 工作流、变更命名规范、演进跟踪规则、审查检查清单
+
 ## 踩坑记录
 
 （随实践积累补充）

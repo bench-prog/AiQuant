@@ -68,21 +68,27 @@ AiQuant/
 
 ## 5. 现有策略清单
 
-| 策略文件 | 类型 | 说明 |
-|----------|------|------|
-| `strategy_ai_model_v1.py` | AI 模型策略 | 加载 sklearn/LSTM 模型，特征工程驱动 |
-| `strategy_smallcap_v3_regime.py` | 小市值策略 | Regime Switching + Hyperopt 优化 |
-| `strategy_smallcap_v2_turtle.py` | 小市值策略 | Turtle 趋势跟踪 |
-| `strategy_smallcap_v1_event_driven.py` | 小市值策略 | 事件驱动 |
-| `strategy_gold_pulse_v1.py` | 黄金脉冲策略 | （待补充） |
+| 策略类名 | 策略文件 | 类型 | 说明 |
+|---------|---------|------|------|
+| `AIModelStrategy` | `strategy_ai_model_v1.py` | AI 模型驱动 | 加载 sklearn/LSTM 模型，单币种分类信号 |
+| `AIModelRankerStrategy` | `strategy_ai_ranker_v1.py` | AI 截面排序 | 回归模型预测收益率，做多 Top 3 |
+| `TrendFollowingStrategy` | `strategy_trend_following_v1.py` | 纯规则趋势 | EMA 多头排列 + ADX 过滤，零 ML 依赖 |
+| `SmallCapRegimeStrategy` | `strategy_smallcap_v3_regime.py` | Regime Switching | 市场状态切换 + Hyperopt 优化 |
+| `SmallCapTurtleStrategy` | `strategy_smallcap_v2_turtle.py` | Turtle 趋势 | Turtle 法则适配小市值币种 |
+| `SmallCapEventDrivenStrategy` | `strategy_smallcap_v1_event_driven.py` | 事件驱动 | 小市值币种事件驱动 |
+| `GoldPulseStrategy` | `strategy_gold_pulse_v1.py` | 跨品种传导 | 黄金→原油脉冲传导 |
+
+> 完整演进历史见 `cclt/knowledge/strategy-evolution.md`
 
 ## 6. 特征工程 (features.py)
 
-- **指标**: EMA, RSI, MACD, ATR, ADX, Bollinger Bands, Stochastic, CCI, VWAP, OBV
+- **指标**: EMA, RSI, MACD, ATR, ADX, Bollinger Bands, Stochastic, CCI, Williams %R, VWAP, OBV
 - **价格行为**: 实体比例、影线比例、收盘价与均线关系
 - **滞后特征**: 收益率/成交量滞后 1/2/3/5/10 周期
 - **时间特征**: 小时正弦/余弦编码
 - **资金费率**: 资金费率原始值、EMA、符号、变化率
+- **FeatureRegistry**: 特征注册表类（参数化重构阶段 2 产出）
+- **FEATURE_PARAMS**: 集中参数配置字典（参数化重构阶段 1 产出）
 - **总特征数**: 46 列（见 `feature_config.json`）
 
 ## 7. 模型配置
