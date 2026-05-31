@@ -46,3 +46,7 @@
 - **特征函数间 EMA 重复计算**: `add_candle_features()` 内联计算 EMA 与 `add_trend_features()` 冗余，应复用已有列 → `features.py::add_candle_features`
 - **新增特征破坏模型兼容**: 特征列数变化导致旧 `.pkl` / `.pt` 无法加载，需版本管理或重新训练 → `freqtrade/user_data/models/`
 - **向后兼容复用模式**: `df["ema_12"] if "ema_12" in df.columns else ema(...)` 是安全的跨函数列复用模式 → `features.py`
+- **特征参数集中管理**: `FEATURE_PARAMS` 字典集中管理所有指标窗口参数，超参优化和消融实验可自动化 → `features.py::FEATURE_PARAMS`
+- **FeatureRegistry 按需计算**: 按特征组名计算避免全量开销，支持元数据管理和配置驱动 → `features.py::FeatureRegistry`
+- **YAML 配置驱动特征**: `load_feature_config()` 支持 "default"/"minimal" 预设，为 A/B 实验和多策略配置打基础 → `features.py::load_feature_config`
+- **大时间框架防泄漏**: 4h/1d 特征合并到 1h 时，时间戳需偏移一个周期长度后再 ffill，避免用未完成蜡烛数据 → `features.py::add_higher_timeframe_features`
