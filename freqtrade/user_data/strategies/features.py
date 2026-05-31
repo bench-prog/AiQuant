@@ -94,8 +94,13 @@ def rsi(series: pd.Series, length: int = 14) -> pd.Series:
     loss = -delta.where(delta < 0, 0.0)
     avg_gain = gain.ewm(alpha=1.0 / length, min_periods=length).mean()
     avg_loss = loss.ewm(alpha=1.0 / length, min_periods=length).mean()
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    avg_loss_safe = avg_loss.replace(0, np.nan)
+    rs = avg_gain / avg_loss_safe
+    result = 100 - (100 / (1 + rs))
+    # 当 avg_loss=0 且 avg_gain>0 时，RSI 应为 100（全涨）
+    mask = (avg_loss == 0) & (avg_gain > 0)
+    result = result.where(~mask, 100.0)
+    return result
 
 
 def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -143,11 +148,16 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> 
     minus_dm_smooth = minus_dm.ewm(alpha=alpha, min_periods=length).mean()
 
     # +DI / -DI
-    plus_di = 100 * plus_dm_smooth / tr_smooth
-    minus_di = 100 * minus_dm_smooth / tr_smooth
+    tr_safe = tr_smooth.replace(0, np.nan)
+    plus_di = 100 * plus_dm_smooth / tr_safe
+    plus_di = plus_di.fillna(0.0)
+    minus_di = 100 * minus_dm_smooth / tr_safe
+    minus_di = minus_di.fillna(0.0)
 
     # DX 与 ADX
-    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di)
+    di_sum_safe = (plus_di + minus_di).replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / di_sum_safe
+    dx = dx.fillna(0.0)
     adx_series = dx.ewm(alpha=alpha, min_periods=length).mean()
 
     return adx_series, plus_di, minus_di
@@ -164,7 +174,9 @@ def bbands(series: pd.Series, length: int = 20, std: float = 2.0) -> tuple[pd.Se
 def stoch(high: pd.Series, low: pd.Series, close: pd.Series, k: int = 14, d: int = 3) -> tuple[pd.Series, pd.Series]:
     lowest_low = low.rolling(window=k).min()
     highest_high = high.rolling(window=k).max()
-    stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+    range_safe = (highest_high - lowest_low).replace(0, np.nan)
+    stoch_k = 100 * (close - lowest_low) / range_safe
+    stoch_k = stoch_k.fillna(0.0)
     stoch_d = stoch_k.rolling(window=d).mean()
     return stoch_k, stoch_d
 
@@ -173,14 +185,17 @@ def cci(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 20) -> 
     tp = (high + low + close) / 3
     sma_tp = tp.rolling(window=length).mean()
     mean_dev = tp.rolling(window=length).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
-    return (tp - sma_tp) / (0.015 * mean_dev)
+    mean_dev_safe = mean_dev.replace(0, np.nan)
+    return (tp - sma_tp) / (0.015 * mean_dev_safe)
 
 
 def williams_r(high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14) -> pd.Series:
     """Williams %R — 与 Stochastic 类似但刻度为 [-100, 0]。"""
     highest_high = high.rolling(window=length).max()
     lowest_low = low.rolling(window=length).min()
-    return -100 * (highest_high - close) / (highest_high - lowest_low)
+    range_safe = (highest_high - lowest_low).replace(0, np.nan)
+    result = -100 * (highest_high - close) / range_safe
+    return result.fillna(0.0)
 
 
 def mom(series: pd.Series, length: int = 10) -> pd.Series:
@@ -193,8 +208,14 @@ def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
 
 
 def vwap(df: pd.DataFrame) -> pd.Series:
+    """全历史累积 VWAP（非日内重置）。
+
+    计算从序列起点到当前行的成交量加权平均价格。
+    注意：跨日时不会自动重置，若需日内 VWAP 应额外处理。
+    """
     tp = (df["high"] + df["low"] + df["close"]) / 3
-    return (tp * df["volume"]).cumsum() / df["volume"].cumsum()
+    volume_cumsum = df["volume"].cumsum().replace(0, np.nan)
+    return (tp * df["volume"]).cumsum() / volume_cumsum
 
 
 def add_trend_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
@@ -257,8 +278,9 @@ def add_volume_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
     params = params or FEATURE_PARAMS
     df = df.copy()
     vol_sma = params.get("volume_sma_length", 20)
-    df[f"volume_sma_{vol_sma}"] = df["volume"].rolling(window=vol_sma).mean()
-    df["volume_ratio"] = df["volume"] / df[f"volume_sma_{vol_sma}"]
+    vol_sma_col = f"volume_sma_{vol_sma}"
+    df[vol_sma_col] = df["volume"].rolling(window=vol_sma).mean()
+    df["volume_ratio"] = df["volume"] / df[vol_sma_col].replace(0, np.nan)
     df["obv"] = obv(df["close"], df["volume"])
     df["vwap"] = vwap(df)
     df["obv_change_1h"] = df["obv"].diff(1)
@@ -268,8 +290,10 @@ def add_volume_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
 
 
 def add_candle_features(df: pd.DataFrame, params: dict = None) -> pd.DataFrame:
+    params = params or FEATURE_PARAMS  # noqa: F841  # 保持接口一致，candle 特征使用固定 EMA 长度
     df = df.copy()
-    # 复用 add_trend_features 已生成的 ema 列，避免重复计算
+    # candle 特征使用固定的 EMA 长度（12, 26），与 ema_lengths 配置独立
+    # 这是为了确保 close_above_ema12/26 列的语义稳定
     ema_12 = df["ema_12"] if "ema_12" in df.columns else ema(df["close"], 12)
     ema_26 = df["ema_26"] if "ema_26" in df.columns else ema(df["close"], 26)
     df["close_above_ema12"] = (df["close"] > ema_12).astype(int)
@@ -284,7 +308,7 @@ def add_lag_features(df: pd.DataFrame, params: dict = None, lags: list[int] = No
     if lags is not None:
         lag_periods = lags
     else:
-        params = params or FEATURE_PARAMS
+        params = params if params is not None else FEATURE_PARAMS
         lag_periods = params.get("lag_periods", [1, 2, 3, 5, 10])
     df = df.copy()
     for lag in lag_periods:
@@ -383,9 +407,10 @@ def add_higher_timeframe_features(
     df_4h: pd.DataFrame | None = None,
     df_1d: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """将大时间框架特征合并到主时间框架（1h）。
+    """将大时间框架特征合并到主时间框架。
 
-    大时间框架只计算核心趋势/动量/波动率指标，通过前向填充对齐到 1h。
+    支持任意主时间框架（如 1h、4h），通过前向填充对齐。
+    大时间框架只计算核心趋势/动量/波动率指标。
     关键：高层蜡烛的时间戳是周期起点，数据到周期结尾才已知。
     因此将时间戳偏移一个周期长度，确保 ffill 只用已完成蜡烛的数据，
     避免未来信息泄漏。
@@ -462,7 +487,8 @@ class FeatureRegistry:
         names = feature_names or list(self._features.keys())
         for name in names:
             meta = self._features[name]
-            cfg = config or meta.get("params")
+            # 明确优先级: 传入 config > 注册时 params > None (函数内部 fallback)
+            cfg = config if config is not None else meta.get("params")
             if cfg is not None:
                 df = meta["func"](df, cfg)
             else:

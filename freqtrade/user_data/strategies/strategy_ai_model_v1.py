@@ -430,10 +430,12 @@ class AIModelStrategy(IStrategy):
         self._current_active_pair = pair
 
         # Merge external data (funding rate / open interest) via unified data service
+        # 限制查询窗口为最近 90 天，避免回测时缓存膨胀
+        _EXT_DATA_WINDOW_DAYS = 90
         if pair and "date" in dataframe.columns:
             try:
-                since = dataframe["date"].min().strftime("%Y-%m-%d")
                 until = dataframe["date"].max().strftime("%Y-%m-%d")
+                since = (dataframe["date"].max() - pd.Timedelta(days=_EXT_DATA_WINDOW_DAYS)).strftime("%Y-%m-%d")
                 fr_df = query("funding_rate", pair, since=since, until=until,
                               exchange_name=exchange_name, use_cache=True)
                 dataframe = merge_into(dataframe, fr_df, "fundingRate")
@@ -441,8 +443,8 @@ class AIModelStrategy(IStrategy):
                 logger.warning(f"[AiQuant] Failed to merge funding rate: {e}")
 
             try:
-                since = dataframe["date"].min().strftime("%Y-%m-%d")
                 until = dataframe["date"].max().strftime("%Y-%m-%d")
+                since = (dataframe["date"].max() - pd.Timedelta(days=_EXT_DATA_WINDOW_DAYS)).strftime("%Y-%m-%d")
                 oi_df = query("open_interest", pair, since=since, until=until,
                               exchange_name=exchange_name, use_cache=True)
                 dataframe = merge_into(dataframe, oi_df, "openInterest")
@@ -532,15 +534,20 @@ class AIModelStrategy(IStrategy):
             X = (X - self.scaler_mean) / self.scaler_scale
 
         predictions = []
+        skipped = 0
         for i in range(len(df_valid)):
             if i < lookback:
                 predictions.append(0.5)
+                skipped += 1
                 continue
             seq = X[i - lookback:i]
             seq_tensor = torch.tensor(seq, dtype=torch.float32).unsqueeze(0)  # (1, seq, feat)
             with torch.no_grad():
                 pred = self.pytorch_model(seq_tensor).item()
             predictions.append(pred)
+
+        if skipped > 0:
+            logger.info(f"[AiQuant] LSTM skipped first {skipped} bars (lookback={lookback}). Neutral predictions used.")
 
         dataframe.loc[valid_idx, "ai_prediction"] = predictions
         dataframe["ai_prediction"] = dataframe["ai_prediction"].fillna(0.5)
@@ -627,7 +634,10 @@ class AIModelStrategy(IStrategy):
 
         # Optional: add confirmation filters
         # e.g., exit if RSI is extremely overbought
-        overbought = dataframe["rsi_14"] > 80
+        if "rsi_14" in dataframe.columns:
+            overbought = dataframe["rsi_14"] > 80
+        else:
+            overbought = pd.Series(False, index=dataframe.index)
 
         dataframe.loc[ai_exit | overbought, "exit_long"] = 1
         return dataframe
