@@ -128,6 +128,10 @@ AI 模型驱动:
          ├── [[cclt-skill]]: Skill 驱动 + SessionStart/Stop hooks
          ├── [[features-enhancement]]: 特征增强 ✅ 已归档 (ADX修复+6新指标+类型注解)
          └── [[features-parametrization]]: 参数化重构 ✅ 已归档 (FEATURE_PARAMS+FeatureRegistry+YAML配置)
+
+2026-05  ▶ 动态仓位管理
+         ├── [[fix-critical-review]]: Stage 2 审查，15 个 Critical 问题修复
+         └── [[dynamic-position-sizing]]: custom_stake_amount() 置信度×波动率动态仓位
 ```
 
 ---
