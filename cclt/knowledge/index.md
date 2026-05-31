@@ -42,4 +42,7 @@
 
 ## 踩坑记录
 
-（随实践积累补充）
+- **指标函数定义 ≠ 特征列生成**: `adx()` 已定义但 `add_trend_features()` 未调用，导致特征缺失。必须 double check 调用链 → `features.py::build_all_features`
+- **特征函数间 EMA 重复计算**: `add_candle_features()` 内联计算 EMA 与 `add_trend_features()` 冗余，应复用已有列 → `features.py::add_candle_features`
+- **新增特征破坏模型兼容**: 特征列数变化导致旧 `.pkl` / `.pt` 无法加载，需版本管理或重新训练 → `freqtrade/user_data/models/`
+- **向后兼容复用模式**: `df["ema_12"] if "ema_12" in df.columns else ema(...)` 是安全的跨函数列复用模式 → `features.py`

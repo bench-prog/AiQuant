@@ -1,6 +1,6 @@
 # features.py 增强
 
-> status: propose
+> status: done
 > created: 2026-05-23
 > complexity: 🟡中等
 
@@ -133,8 +133,17 @@
 
 | Task | 状态 | 实际改动文件 | 备注 |
 |------|------|-------------|------|
+| Task 1: ADX 使用 + EMA 重复计算修复 | ✅ | `freqtrade/user_data/strategies/features.py` | `add_trend_features()` 调用 `adx()`；`add_candle_features()` 复用已有 ema 列 |
+| Task 2: Williams %R + MOM | ✅ | `features.py` | 新增 `williams_r()` / `mom()`，加入 `add_momentum_features()` |
+| Task 3: OBV 变化率 + VWAP 偏离度 + BB position | ✅ | `features.py` | `add_volume_features()` / `add_volatility_features()` 新增列 |
+| Task 4: 类型注解 + 最终验证 | ✅ | `features.py`, `tests/test_features.py` | 全部函数完整类型注解；60/60 测试通过；ruff 通过 |
 
 ## 12. 审查结论
+
+✅ 代码实现与 Spec 一致（Reverse Sync 确认：代码已领先于 Spec，无偏差）。
+✅ 60/60 测试通过。
+✅ ruff check 通过。
+⚠️ 新增 6 列特征后，旧模型（46 列）不兼容，需重新训练。
 
 ## 13. 确认记录（HARD-GATE）
 

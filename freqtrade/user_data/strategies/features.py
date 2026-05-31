@@ -84,6 +84,7 @@ def load_feature_config(path: str | Path | dict | None = None) -> dict:
 
 
 def ema(series: pd.Series, length: int) -> pd.Series:
+    """指数移动平均。"""
     return series.ewm(span=length, adjust=False).mean()
 
 
