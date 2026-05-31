@@ -171,6 +171,25 @@ FEATURE_CONFIG_PATHS = [
 ENTRY_THRESHOLD = 0.6   # Model probability > 0.6 -> enter long
 EXIT_THRESHOLD = 0.4    # Model probability < 0.4 -> exit long
 
+# ---------------------------------------------------------------------------
+# Dynamic Position Sizing Configuration
+# ---------------------------------------------------------------------------
+POSITION_SIZING_CONFIG = {
+    "method": "confidence_x_volatility",
+    "base_wallet_pct": 0.10,      # 总资金的 10% 作为 base_stake 池
+    "min_position_pct": 0.20,     # 最低仓位 = base_stake × 0.20
+    "max_position_pct": 2.00,     # 最高仓位 = base_stake × 2.00
+    "confidence": {
+        "threshold_low": ENTRY_THRESHOLD,  # 0.60
+        "threshold_high": 0.90,            # 满仓信号
+        "mapping": "linear",               # linear / exponential
+    },
+    "volatility": {
+        "target_atr_pct": 0.02,    # 目标 ATR 百分比 = 2%
+        "max_atr_pct": 0.05,       # ATR > 5% 时仓位最小
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Strategy
@@ -641,3 +660,119 @@ class AIModelStrategy(IStrategy):
 
         dataframe.loc[ai_exit | overbought, "exit_long"] = 1
         return dataframe
+
+    # ------------------------------------------------------------------
+    # Dynamic Position Sizing
+    # ------------------------------------------------------------------
+    def custom_stake_amount(
+        self,
+        pair: str,
+        current_time: pd.Timestamp,
+        current_rate: float,
+        proposed_stake: float,
+        min_stake: float | None,
+        max_stake: float,
+        entry_tag: str | None,
+        side: str,
+        **kwargs,
+    ) -> float:
+        """基于模型置信度 × ATR 波动率的动态仓位管理。
+
+        公式: final_stake = base_stake × confidence_factor × volatility_factor
+
+        Args:
+            pair: 交易对，如 "BTC/USDT"
+            current_time: 当前时间
+            current_rate: 当前价格
+            proposed_stake: Freqtrade 建议的仓位（由 stake_amount 配置决定）
+            min_stake: 最小仓位限制
+            max_stake: 最大仓位限制
+            entry_tag: 入场标签
+            side: "long" 或 "short"
+
+        Returns:
+            最终开仓金额（USDT）
+        """
+        cfg = POSITION_SIZING_CONFIG
+        wallet_balance = self.wallets.get_total_stake_amount()
+        max_trades = self.config.get("max_open_trades", 9)
+
+        # 1. 计算 base_stake = 钱包百分比 / max_open_trades
+        base_stake = wallet_balance * cfg["base_wallet_pct"] / max_trades
+
+        # 2. 获取当前 pair 的 dataframe（包含 ai_prediction 和 atr_14）
+        dataframe = self.dp.get_pair_dataframe(pair, self.timeframe)
+        if dataframe.empty or len(dataframe) == 0:
+            return proposed_stake
+
+        latest = dataframe.iloc[-1]
+
+        # 3. 计算置信度因子
+        confidence_factor = self._compute_confidence_factor(latest, cfg)
+
+        # 4. 计算波动率因子
+        volatility_factor = self._compute_volatility_factor(latest, cfg)
+
+        # 5. 组合计算
+        final_stake = base_stake * confidence_factor * volatility_factor
+
+        # 6. 边界保护
+        min_pos = cfg["min_position_pct"]
+        max_pos = cfg["max_position_pct"]
+        final_stake = max(final_stake, base_stake * min_pos)
+        final_stake = min(final_stake, base_stake * max_pos)
+        final_stake = min(final_stake, max_stake)
+        if min_stake is not None:
+            final_stake = max(final_stake, min_stake)
+
+        logger.info(
+            f"[AiQuant] Position sizing for {pair}: "
+            f"base={base_stake:.2f}, conf={confidence_factor:.2f}, "
+            f"vol={volatility_factor:.2f}, final={final_stake:.2f}"
+        )
+        return float(final_stake)
+
+    def _compute_confidence_factor(
+        self, latest: pd.Series, cfg: dict
+    ) -> float:
+        """将 ai_prediction 映射到 [0, 1] 的置信度因子。"""
+        if "ai_prediction" not in latest or pd.isna(latest["ai_prediction"]):
+            return 1.0  # 缺失时回退到 base_stake
+
+        pred = float(latest["ai_prediction"])
+        conf_cfg = cfg["confidence"]
+        low = conf_cfg["threshold_low"]
+        high = conf_cfg["threshold_high"]
+
+        if conf_cfg["mapping"] == "linear":
+            factor = (pred - low) / (high - low)
+        else:
+            factor = ((pred - low) / (high - low)) ** 2
+
+        return float(np.clip(factor, 0.0, 1.0))
+
+    def _compute_volatility_factor(
+        self, latest: pd.Series, cfg: dict
+    ) -> float:
+        """将 ATR 百分比映射到 [min_position_pct, 1.0] 的波动率因子。"""
+        if "atr_14" not in latest or pd.isna(latest["atr_14"]) or "close" not in latest:
+            return 1.0  # 缺失时回退到 base_stake
+
+        atr = float(latest["atr_14"])
+        close = float(latest["close"])
+        if close == 0 or atr == 0:
+            return 1.0
+
+        atr_pct = atr / close
+        vol_cfg = cfg["volatility"]
+        target = vol_cfg["target_atr_pct"]
+        max_atr = vol_cfg["max_atr_pct"]
+
+        # ATR% = target → factor = 1.0
+        # ATR% = max → factor = min_position_pct
+        if atr_pct >= max_atr:
+            factor = cfg["min_position_pct"]
+        else:
+            factor = target / atr_pct
+
+        return float(np.clip(factor, cfg["min_position_pct"], 1.0))
