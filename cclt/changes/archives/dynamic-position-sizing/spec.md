@@ -1,6 +1,6 @@
 # dynamic-position-sizing — 动态仓位管理
 
-> status: propose
+> status: done
 > created: 2026-05-31
 > complexity: 🟡中等
 
@@ -96,7 +96,7 @@
 ## 9. 待澄清
 
 - [x] **Q1: 仓位计算方式** — 已确认 C（组合：置信度 × 波动率）
-- [ ] **Q2: base_stake 来源** — 固定金额 vs 钱包百分比 vs 风险金额
+- [x] **Q2: base_stake 来源** — 已确认 B（钱包百分比）
 
 ## 10. 技术决策
 
@@ -110,8 +110,21 @@
 
 | Task | 状态 | 实际改动文件 | 备注 |
 |------|------|-------------|------|
+| Task 1: POSITION_SIZING_CONFIG + custom_stake_amount() 骨架 | ✅ | `strategy_ai_model_v1.py` | POSITION_SIZING_CONFIG 字典 + custom_stake_amount() 方法签名 |
+| Task 2: 置信度因子 + 波动率因子计算逻辑 | ✅ | `strategy_ai_model_v1.py` | _compute_confidence_factor() + _compute_volatility_factor() 完整实现 |
+| Task 3: 配置更新 + 测试 + 回归验证 | ✅ | `config_ai_model.json`, `tests/test_position_sizing.py` | stake_amount → "unlimited", 20 个测试用例, 80/80 测试通过 |
 
 ## 12. 审查结论
+
+✅ 代码实现与 Spec 一致。
+✅ 80/80 测试通过（新 20 + 现有 60）。
+✅ ruff check 通过。
+⚠️ 涉及资金/交易逻辑变更 — 建议人工审查后再部署实盘。
+
+## 13. 确认记录（HARD-GATE）
+
+- **确认时间**: 2026-05-31
+- **确认人**: cclt
 
 ## 13. 确认记录（HARD-GATE）
 

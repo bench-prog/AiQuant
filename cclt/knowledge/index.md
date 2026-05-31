@@ -58,3 +58,6 @@
 - **空字典防御**: Python 中 `{}` 是 truthy，`params or FEATURE_PARAMS` 不会 fallback，必须用 `is not None` 判断 → `features.py`
 - **配置一致性**: `trading_mode` 和 `exchange.ccxt_config.options.defaultType` 必须匹配，否则交易行为异常 → `config_*.json`
 - **外部数据窗口限制**: 回测时请求全周期外部数据会导致缓存膨胀，应限制为合理窗口（如 90 天）→ `strategy_ai_model_v1.py::populate_indicators`
+- **动态仓位公式**: `final = base × confidence × volatility`，base 用钱包百分比，confidence 线性映射，volatility 用 ATR 反比 → `strategy_ai_model_v1.py::custom_stake_amount`
+- **仓位边界保护**: 最小仓位（如 20%）防止手续费占比过高，最大仓位（如 200%）防止过度集中 → `strategy_ai_model_v1.py::POSITION_SIZING_CONFIG`
+- **纯函数测试策略**: Freqtrade 策略类依赖运行时，核心计算逻辑提取为纯函数便于单元测试 → `tests/test_position_sizing.py`
