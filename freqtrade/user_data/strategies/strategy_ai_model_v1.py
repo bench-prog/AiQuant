@@ -158,7 +158,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-MODEL_DIR = Path("/freqtrade/user_data/models")
+# 模型目录：支持本地开发和 Docker 环境
+_MODEL_DIR = None
+for candidate in [
+    Path(__file__).parent.parent / "models",
+    Path("/freqtrade/user_data/models"),
+]:
+    if candidate.exists():
+        _MODEL_DIR = candidate
+        break
+
+MODEL_DIR = _MODEL_DIR or Path("/freqtrade/user_data/models")
 SKLEARN_MODEL_PATH = MODEL_DIR / "sklearn_model.pkl"
 PYTORCH_MODEL_PATH = MODEL_DIR / "pytorch_model.pt"
 FEATURE_CONFIG_PATHS = [
