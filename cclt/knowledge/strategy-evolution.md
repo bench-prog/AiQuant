@@ -132,6 +132,9 @@ AI 模型驱动:
 2026-05  ▶ 动态仓位管理
          ├── [[fix-critical-review]]: Stage 2 审查，15 个 Critical 问题修复
          └── [[dynamic-position-sizing]]: custom_stake_amount() 置信度×波动率动态仓位
+
+2026-05  ▶ 策略组合
+         └── [[strategy-ensemble]]: StrategyEnsemble AI+Trend 加权融合
 ```
 
 ---
