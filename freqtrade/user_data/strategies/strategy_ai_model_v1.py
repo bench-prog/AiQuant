@@ -180,12 +180,12 @@ POSITION_SIZING_CONFIG = {
     "min_position_pct": 0.20,     # 最低仓位 = base_stake × 0.20
     "max_position_pct": 2.00,     # 最高仓位 = base_stake × 2.00
     "confidence": {
-        "threshold_low": ENTRY_THRESHOLD,  # 0.60
-        "threshold_high": 0.90,            # 满仓信号
-        "mapping": "linear",               # linear / exponential
+        "threshold_low": 0.55,     # 降低入场门槛（原为 ENTRY_THRESHOLD=0.60）
+        "threshold_high": 0.90,    # 满仓信号
+        "mapping": "linear",       # linear / exponential
     },
     "volatility": {
-        "target_atr_pct": 0.02,    # 目标 ATR 百分比 = 2%
+        "target_atr_pct": 0.015,   # 目标 ATR 百分比 = 1.5%（BTC 4h 均值约 1.38%）
         "max_atr_pct": 0.05,       # ATR > 5% 时仓位最小
     },
 }
