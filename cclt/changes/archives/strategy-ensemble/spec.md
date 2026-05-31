@@ -1,6 +1,6 @@
 # strategy-ensemble — 策略加权融合
 
-> status: propose
+> status: done
 > created: 2026-05-31
 > complexity: 🔴复杂
 
@@ -113,10 +113,18 @@
 
 | Task | 状态 | 实际改动文件 | 备注 |
 |------|------|-------------|------|
+| Task 1: StrategyEnsemble 骨架 + 信号归一化 | ✅ | `strategy_ensemble_v1.py` | StrategyEnsemble 类，集成 AI 和 Trend 信号计算逻辑 |
+| Task 2: AI 信号集成 + Trend 信号集成 | ✅ | `strategy_ensemble_v1.py` | _compute_ai_signal() + _compute_trend_signal() 完整实现 |
+| Task 3: 加权融合 + 配置 + 测试 | ✅ | `config_ensemble.json`, `tests/test_ensemble.py` | ensemble_score 计算、入场/出场逻辑、21 个测试用例 |
 
 ## 12. 审查结论
 
+✅ 代码实现与 Spec 一致。
+✅ 21/21 测试通过。
+✅ ruff check 通过。
+⚠️ 涉及资金/交易逻辑变更 — 建议人工审查后再部署实盘。
+
 ## 13. 确认记录（HARD-GATE）
 
-- **确认时间**:
-- **确认人**:
+- **确认时间**: 2026-05-31
+- **确认人**: cclt

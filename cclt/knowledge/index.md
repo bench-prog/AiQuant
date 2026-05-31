@@ -61,3 +61,6 @@
 - **动态仓位公式**: `final = base × confidence × volatility`，base 用钱包百分比，confidence 线性映射，volatility 用 ATR 反比 → `strategy_ai_model_v1.py::custom_stake_amount`
 - **仓位边界保护**: 最小仓位（如 20%）防止手续费占比过高，最大仓位（如 200%）防止过度集中 → `strategy_ai_model_v1.py::POSITION_SIZING_CONFIG`
 - **纯函数测试策略**: Freqtrade 策略类依赖运行时，核心计算逻辑提取为纯函数便于单元测试 → `tests/test_position_sizing.py`
+- **策略组合模式**: 在单一 IStrategy 中集成多个子策略的信号逻辑，通过加权融合生成最终信号 → `strategy_ensemble_v1.py`
+- **信号归一化**: 不同策略的信号范围不同（概率 [0,1] vs 布尔 {0,1}），必须统一映射到相同范围才能加权 → `strategy_ensemble_v1.py::_compute_trend_signal`
+- **互补性设计**: AI 抓时机 + Trend 抓方向，两者在不同市场状态下各有优势，组合后平滑收益曲线 → `strategy_ensemble_v1.py::ENSEMBLE_WEIGHTS`
